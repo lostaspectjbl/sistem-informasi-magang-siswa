@@ -3,7 +3,7 @@
 
 
 import AppLayout from '@/components/layout/appLayout';
-import { siswaMenuItems } from '@/components/layout/MenuConfig';
+import { guruMenuItems } from '@/components/layout/MenuConfig';
 
 export default function AdminLayout({
   children,
@@ -11,17 +11,17 @@ export default function AdminLayout({
   children: React.ReactNode;
 }) {
   const userInfo = {
-    name: 'Jabal Ario Dewantoro',
-    email: 'siswa@smkplusalmaarif.sch.id',
-    role: 'Siswa',
-    avatar: 'SW'
+    name: 'Pak Suryanto',
+    email: 'guru@smkplusalmaarif.sch.id',
+    role: 'Guru',
+    avatar: 'GR'
   };
 
   return (
     <AppLayout 
       userInfo={userInfo} 
-      menuItems={siswaMenuItems}
-      baseRoute="/siswa"
+      menuItems={guruMenuItems}
+      baseRoute="/guru"
     >
       {children}
     </AppLayout>

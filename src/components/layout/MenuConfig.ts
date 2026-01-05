@@ -80,27 +80,15 @@ export const siswaMenuItems: MenuItem[] = [
     description: 'Ringkasan magang'
   },
   {
-    title: 'Logbook',
+    title: 'Jurnal',
     icon: ClipboardList,
-    href: '/siswa/logbook',
+    href: '/siswa/jurnal',
     description: 'Catatan harian'
   },
   {
-    title: 'DUDI',
+    title: 'Magang',
     icon: Building2,
-    href: '/siswa/dudi',
-    description: 'Info perusahaan'
+    href: '/siswa/magang',
+    description: 'Info magang'
   },
-  {
-    title: 'Nilai',
-    icon: Award,
-    href: '/siswa/nilai',
-    description: 'Hasil penilaian'
-  },
-  {
-    title: 'Dokumen',
-    icon: FileText,
-    href: '/siswa/dokumen',
-    description: 'Sertifikat & laporan'
-  }
 ];

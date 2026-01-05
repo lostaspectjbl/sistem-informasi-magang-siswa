@@ -46,11 +46,11 @@ const getRoleLightColor = (role: string) => {
     case 'admin':
       return 'bg-purple-50 hover:bg-purple-100';
     case 'guru':
-      return 'bg-blue-50 hover:bg-blue-100';
+      return 'bg-purple-50 hover:bg-purple-100';
     case 'siswa':
-      return 'bg-cyan-50 hover:bg-cyan-100';
+      return 'bg-purple-50 hover:bg-purple-100';
     default:
-      return 'bg-gray-50 hover:bg-gray-100';
+      return 'bg-purple-50 hover:bg-purple-100';
   }
 };
 
@@ -109,7 +109,7 @@ export default function Sidebar({
         {(isMobile || sidebarOpen) && (
           <div className="pt-4 border-t border-gray-200">
             <div className="text-xs text-gray-500 space-y-1">
-              <p className="font-medium">SMK Negeri 1 Surabaya</p>
+              <p className="font-medium">SMK Plus Almaarif</p>
               <p>Sistem Pelaporan v1.0</p>
               <div className="mt-2">
                 <Badge variant="outline" className="text-xs">

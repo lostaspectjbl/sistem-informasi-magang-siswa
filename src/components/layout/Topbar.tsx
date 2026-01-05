@@ -189,20 +189,6 @@ export default function Topbar({
                   <p className="text-xs text-gray-500">{userInfo.email}</p>
                 </div>
               </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem asChild>
-                <Link href={`${baseRoute}/profile`} className="cursor-pointer">
-                  <User className="mr-2 h-4 w-4" />
-                  <span>Profil Saya</span>
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link href={`${baseRoute}/settings`} className="cursor-pointer">
-                  <Settings className="mr-2 h-4 w-4" />
-                  <span>Pengaturan</span>
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
               <DropdownMenuItem 
                 className="text-red-600 cursor-pointer focus:text-red-600 focus:bg-red-50"
                 onClick={handleLogout}

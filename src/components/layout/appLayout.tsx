@@ -77,9 +77,15 @@ export default function AppLayout({
       )}
 
       {/* Main Content */}
-      <main className="pt-16">
-        {children}
-    </main>
+      <main 
+        className={`pt-16 transition-all duration-300 ${
+          sidebarOpen ? 'lg:pl-64' : 'lg:pl-20'
+        }`}
+      >
+        <div className="p-6">
+          {children}
+        </div>
+      </main>
     </div>
   );
 }
