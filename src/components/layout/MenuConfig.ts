@@ -42,6 +42,18 @@ export const adminMenuItems: MenuItem[] = [
     icon: Settings,
     href: '/admin/settings',
     description: 'Konfigurasi sistem'
+  },
+  {
+    title: 'Siswa',
+    icon: Award,
+    href: '/admin/siswa',
+    description: 'Manajemen siswa'
+  },
+  {
+    title: 'Guru',
+    icon: Users,
+    href: '/admin/guru',
+    description: 'Manajemen guru'
   }
 ];
 
