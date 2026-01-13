@@ -88,7 +88,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="p-8">
+    <div className="space-y-6">
       {/* HEADER */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-800 mb-2">
