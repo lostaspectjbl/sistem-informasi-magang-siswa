@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Users, GraduationCap, CheckCircle, UserX, Search, Plus, Edit, Trash2, Mail, Phone } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -24,6 +24,31 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { supabase } from '@/lib/supabase';
+import { Database } from '@/types';
+
+type Siswa = Database['public']['Tables']['siswa']['Row'];
+type Guru = Database['public']['Tables']['guru']['Row'];
+type Dudi = Database['public']['Tables']['dudi']['Row'];
+
+interface SiswaWithRelations extends Siswa {
+  guru?: { nama: string } | null;
+  dudi?: { nama_perusahaan: string } | null;
+  magang?: Array<{ status: string }>;
+}
+
+interface FormData {
+  nama: string;
+  nis: string;
+  email: string;
+  kelas: string;
+  jurusan: string;
+  telepon: string;
+  alamat: string;
+  status: string;
+  guru_id: number | null;
+  dudi_id: number | null;
+}
 
 export default function ManajemenSiswaPage() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -31,103 +56,294 @@ export default function ManajemenSiswaPage() {
   const [filterKelas, setFilterKelas] = useState('Semua Kelas');
   const [entriesPerPage, setEntriesPerPage] = useState('10');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editingSiswaId, setEditingSiswaId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  
+  const [siswaData, setSiswaData] = useState<SiswaWithRelations[]>([]);
+  const [guruList, setGuruList] = useState<Guru[]>([]);
+  const [dudiList, setDudiList] = useState<Dudi[]>([]);
+  
+  const [stats, setStats] = useState({
+    totalSiswa: 0,
+    sedangMagang: 0,
+    selesaiMagang: 0,
+    belumAdaPembimbing: 0,
+  });
 
-  // Stats data
-  const stats = [
-    { title: 'Total Siswa', value: '6', subtitle: 'Siswa terdaftar', icon: Users, color: 'text-gray-800' },
-    { title: 'Sedang Magang', value: '3', subtitle: 'Aktif magang', icon: GraduationCap, color: 'text-blue-600' },
-    { title: 'Selesai Magang', value: '1', subtitle: 'Telah selesai', icon: CheckCircle, color: 'text-green-600' },
-    { title: 'Belum Ada Pembimbing', value: '0', subtitle: 'Perlu penugasan', icon: UserX, color: 'text-red-600' },
-  ];
+  const [formData, setFormData] = useState<FormData>({
+    nama: '',
+    nis: '',
+    email: '',
+    kelas: '',
+    jurusan: '',
+    telepon: '',
+    alamat: '',
+    status: 'aktif',
+    guru_id: null,
+    dudi_id: null,
+  });
 
-  // Siswa data
-  const siswaData = [
-    {
-      nis: '2021001',
-      nama: 'Ahmad Rizki Ramadhan',
-      kelas: 'XII - RPL',
-      email: 'ahmad@student.sch.id',
-      telepon: '081234567890',
-      status: 'magang',
-      statusLabel: 'Magang',
-      statusColor: 'bg-blue-100 text-blue-700',
-      guruPembimbing: 'Guru #2',
-      dudi: 'DUDI #1',
-    },
-    {
-      nis: '2021002',
-      nama: 'Siti Nurhaliza',
-      kelas: 'XII - RPL',
-      email: 'siti@student.sch.id',
-      telepon: '081234567891',
-      status: 'magang',
-      statusLabel: 'Magang',
-      statusColor: 'bg-blue-100 text-blue-700',
-      guruPembimbing: 'Guru #2',
-      dudi: 'DUDI #2',
-    },
-    {
-      nis: '2021003',
-      nama: 'Budi Santoso',
-      kelas: 'XII - TKJ',
-      email: 'budi@student.sch.id',
-      telepon: '081234567892',
-      status: 'magang',
-      statusLabel: 'Magang',
-      statusColor: 'bg-blue-100 text-blue-700',
-      guruPembimbing: 'Guru #3',
-      dudi: 'DUDI #3',
-    },
-    {
-      nis: '2021004',
-      nama: 'Dewi Lestari',
-      kelas: 'XI - RPL',
-      email: 'dewi@student.sch.id',
-      telepon: '081234567893',
-      status: 'selesai',
-      statusLabel: 'Selesai',
-      statusColor: 'bg-green-100 text-green-700',
-      guruPembimbing: 'Guru #2',
-      dudi: 'DUDI #4',
-    },
-    {
-      nis: '2021005',
-      nama: 'Eko Prasetyo',
-      kelas: 'XI - TKJ',
-      email: 'eko@student.sch.id',
-      telepon: '081234567894',
+  useEffect(() => {
+    fetchAllData();
+  }, []);
+
+  async function fetchAllData() {
+    try {
+      setLoading(true);
+      await Promise.all([
+        fetchSiswa(),
+        fetchGuru(),
+        fetchDudi(),
+        fetchStats(),
+      ]);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function fetchSiswa() {
+    try {
+      const { data, error } = await supabase
+        .from('siswa')
+        .select(`
+          *,
+          guru:guru_id (nama),
+          dudi:dudi_id (nama_perusahaan),
+          magang (status)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setSiswaData(data || []);
+    } catch (error) {
+      console.error('Error fetching siswa:', error);
+    }
+  }
+
+  async function fetchGuru() {
+    try {
+      const { data, error } = await supabase
+        .from('guru')
+        .select('*')
+        .order('nama');
+
+      if (error) throw error;
+      setGuruList(data || []);
+    } catch (error) {
+      console.error('Error fetching guru:', error);
+    }
+  }
+
+  async function fetchDudi() {
+    try {
+      const { data, error } = await supabase
+        .from('dudi')
+        .select('*')
+        .eq('status', 'aktif')
+        .order('nama_perusahaan');
+
+      if (error) throw error;
+      setDudiList(data || []);
+    } catch (error) {
+      console.error('Error fetching dudi:', error);
+    }
+  }
+
+  async function fetchStats() {
+    try {
+      // Total Siswa
+      const { count: totalSiswa } = await supabase
+        .from('siswa')
+        .select('*', { count: 'exact', head: true });
+
+      // Sedang Magang (status aktif di tabel magang)
+      const { count: sedangMagang } = await supabase
+        .from('magang')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'aktif');
+
+      // Selesai Magang
+      const { count: selesaiMagang } = await supabase
+        .from('magang')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'selesai');
+
+      // Belum Ada Pembimbing
+      const { count: belumAdaPembimbing } = await supabase
+        .from('siswa')
+        .select('*', { count: 'exact', head: true })
+        .is('guru_id', null);
+
+      setStats({
+        totalSiswa: totalSiswa || 0,
+        sedangMagang: sedangMagang || 0,
+        selesaiMagang: selesaiMagang || 0,
+        belumAdaPembimbing: belumAdaPembimbing || 0,
+      });
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+    }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    
+    try {
+      if (isEditMode && editingSiswaId) {
+        // Update
+        const { error } = await (supabase as any)
+          .from('siswa')
+          .update({
+            nama: formData.nama,
+            nis: formData.nis,
+            email: formData.email,
+            kelas: formData.kelas,
+            jurusan: formData.jurusan,
+            telepon: formData.telepon,
+            alamat: formData.alamat,
+            status: formData.status,
+            guru_id: formData.guru_id,
+            dudi_id: formData.dudi_id,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', editingSiswaId);
+
+        if (error) throw error;
+        alert('Siswa berhasil diupdate!');
+      } else {
+        // Insert
+        const { error } = await (supabase as any)
+          .from('siswa')
+          .insert([{
+            nama: formData.nama,
+            nis: formData.nis,
+            email: formData.email,
+            kelas: formData.kelas,
+            jurusan: formData.jurusan,
+            telepon: formData.telepon,
+            alamat: formData.alamat,
+            status: formData.status,
+            guru_id: formData.guru_id,
+            dudi_id: formData.dudi_id,
+          }]);
+
+        if (error) throw error;
+        alert('Siswa berhasil ditambahkan!');
+      }
+
+      setIsDialogOpen(false);
+      resetForm();
+      fetchAllData();
+    } catch (error: any) {
+      console.error('Error saving siswa:', error);
+      alert(`Error: ${error.message}`);
+    }
+  }
+
+  async function handleDelete(id: number, nama: string) {
+    if (!confirm(`Apakah Anda yakin ingin menghapus siswa ${nama}?`)) return;
+
+    try {
+      const { error } = await supabase
+        .from('siswa')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      
+      alert('Siswa berhasil dihapus!');
+      fetchAllData();
+    } catch (error: any) {
+      console.error('Error deleting siswa:', error);
+      alert(`Error: ${error.message}`);
+    }
+  }
+
+  function handleEdit(siswa: SiswaWithRelations) {
+    setIsEditMode(true);
+    setEditingSiswaId(siswa.id);
+    setFormData({
+      nama: siswa.nama,
+      nis: siswa.nis,
+      email: siswa.email,
+      kelas: siswa.kelas || '',
+      jurusan: siswa.jurusan || '',
+      telepon: siswa.telepon || '',
+      alamat: siswa.alamat || '',
+      status: siswa.status,
+      guru_id: siswa.guru_id,
+      dudi_id: siswa.dudi_id,
+    });
+    setIsDialogOpen(true);
+  }
+
+  function resetForm() {
+    setFormData({
+      nama: '',
+      nis: '',
+      email: '',
+      kelas: '',
+      jurusan: '',
+      telepon: '',
+      alamat: '',
       status: 'aktif',
-      statusLabel: 'Aktif',
-      statusColor: 'bg-green-100 text-green-700',
-      guruPembimbing: 'Guru #3',
-      dudi: 'DUDI #5',
-    },
-    {
-      nis: '2021006',
-      nama: 'Fajar Pratama',
-      kelas: 'XI - RPL',
-      email: 'fajar@student.sch.id',
-      telepon: '081234567895',
-      status: 'aktif',
-      statusLabel: 'Aktif',
-      statusColor: 'bg-green-100 text-green-700',
-      guruPembimbing: 'Guru #2',
-      dudi: '-',
-    },
-  ];
+      guru_id: null,
+      dudi_id: null,
+    });
+    setIsEditMode(false);
+    setEditingSiswaId(null);
+  }
+
+  function getStatusInfo(siswa: SiswaWithRelations) {
+    const magangAktif = siswa.magang?.find(m => m.status === 'aktif');
+    const magangSelesai = siswa.magang?.find(m => m.status === 'selesai');
+
+    if (magangAktif) {
+      return { label: 'Magang', color: 'bg-blue-100 text-blue-700' };
+    } else if (magangSelesai) {
+      return { label: 'Selesai', color: 'bg-green-100 text-green-700' };
+    } else if (siswa.status === 'aktif') {
+      return { label: 'Aktif', color: 'bg-green-100 text-green-700' };
+    }
+    return { label: siswa.status, color: 'bg-gray-100 text-gray-700' };
+  }
 
   // Filter data
   const filteredSiswa = siswaData.filter((siswa) => {
+    const statusInfo = getStatusInfo(siswa);
+    const kelasValue = siswa.kelas?.split(' ')[0] || '';
+    
     const matchSearch = 
       siswa.nama.toLowerCase().includes(searchTerm.toLowerCase()) ||
       siswa.nis.includes(searchTerm) ||
-      siswa.kelas.toLowerCase().includes(searchTerm.toLowerCase());
+      (siswa.kelas && siswa.kelas.toLowerCase().includes(searchTerm.toLowerCase()));
     
-    const matchStatus = filterStatus === 'Semua Status' || siswa.statusLabel === filterStatus;
-    const matchKelas = filterKelas === 'Semua Kelas' || siswa.kelas.includes(filterKelas);
+    const matchStatus = filterStatus === 'Semua Status' || statusInfo.label === filterStatus;
+    const matchKelas = filterKelas === 'Semua Kelas' || kelasValue.includes(filterKelas);
 
     return matchSearch && matchStatus && matchKelas;
   });
+
+  const statsCards = [
+    { title: 'Total Siswa', value: stats.totalSiswa.toString(), subtitle: 'Siswa terdaftar', icon: Users, color: 'text-gray-800' },
+    { title: 'Sedang Magang', value: stats.sedangMagang.toString(), subtitle: 'Aktif magang', icon: GraduationCap, color: 'text-blue-600' },
+    { title: 'Selesai Magang', value: stats.selesaiMagang.toString(), subtitle: 'Telah selesai', icon: CheckCircle, color: 'text-green-600' },
+    { title: 'Belum Ada Pembimbing', value: stats.belumAdaPembimbing.toString(), subtitle: 'Perlu penugasan', icon: UserX, color: 'text-red-600' },
+  ];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#ad46ff] mx-auto mb-4"></div>
+          <p className="text-gray-600">Memuat data...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -139,7 +355,7 @@ export default function ManajemenSiswaPage() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((stat, index) => {
+        {statsCards.map((stat, index) => {
           const Icon = stat.icon;
           return (
             <Card key={index}>
@@ -170,7 +386,10 @@ export default function ManajemenSiswaPage() {
             </CardTitle>
 
             {/* Tambah Siswa Dialog */}
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <Dialog open={isDialogOpen} onOpenChange={(open) => {
+              setIsDialogOpen(open);
+              if (!open) resetForm();
+            }}>
               <DialogTrigger asChild>
                 <Button className="bg-[#ad46ff] hover:bg-[#9b36f0] text-white">
                   <Plus className="w-4 h-4 mr-2" />
@@ -181,20 +400,32 @@ export default function ManajemenSiswaPage() {
                 <DialogHeader>
                   <DialogTitle className="flex items-center gap-2">
                     <Users className="w-5 h-5 text-[#ad46ff]" />
-                    Tambah Siswa
+                    {isEditMode ? 'Edit Siswa' : 'Tambah Siswa'}
                   </DialogTitle>
                 </DialogHeader>
 
-                <div className="space-y-4 py-4">
+                <form onSubmit={handleSubmit} className="space-y-4 py-4">
                   {/* NIS & Nama */}
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label htmlFor="nis">NIS</Label>
-                      <Input id="nis" placeholder="Masukkan NIS" />
+                      <Label htmlFor="nis">NIS *</Label>
+                      <Input 
+                        id="nis" 
+                        placeholder="Masukkan NIS" 
+                        value={formData.nis}
+                        onChange={(e) => setFormData({...formData, nis: e.target.value})}
+                        required
+                      />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="nama">Nama Lengkap</Label>
-                      <Input id="nama" placeholder="Masukkan nama lengkap" />
+                      <Label htmlFor="nama">Nama Lengkap *</Label>
+                      <Input 
+                        id="nama" 
+                        placeholder="Masukkan nama lengkap" 
+                        value={formData.nama}
+                        onChange={(e) => setFormData({...formData, nama: e.target.value})}
+                        required
+                      />
                     </div>
                   </div>
 
@@ -202,7 +433,7 @@ export default function ManajemenSiswaPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="kelas">Kelas</Label>
-                      <Select>
+                      <Select value={formData.kelas} onValueChange={(value) => setFormData({...formData, kelas: value})}>
                         <SelectTrigger>
                           <SelectValue placeholder="Pilih Kelas" />
                         </SelectTrigger>
@@ -215,7 +446,7 @@ export default function ManajemenSiswaPage() {
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="jurusan">Jurusan</Label>
-                      <Select>
+                      <Select value={formData.jurusan} onValueChange={(value) => setFormData({...formData, jurusan: value})}>
                         <SelectTrigger>
                           <SelectValue placeholder="Pilih Jurusan" />
                         </SelectTrigger>
@@ -231,12 +462,24 @@ export default function ManajemenSiswaPage() {
                   {/* Email & Telepon */}
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label htmlFor="email">Email</Label>
-                      <Input id="email" type="email" placeholder="email@example.com" />
+                      <Label htmlFor="email">Email *</Label>
+                      <Input 
+                        id="email" 
+                        type="email" 
+                        placeholder="email@example.com" 
+                        value={formData.email}
+                        onChange={(e) => setFormData({...formData, email: e.target.value})}
+                        required
+                      />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="telepon">Telepon</Label>
-                      <Input id="telepon" placeholder="08xxxxxxxxxx" />
+                      <Input 
+                        id="telepon" 
+                        placeholder="08xxxxxxxxxx" 
+                        value={formData.telepon}
+                        onChange={(e) => setFormData({...formData, telepon: e.target.value})}
+                      />
                     </div>
                   </div>
 
@@ -244,43 +487,54 @@ export default function ManajemenSiswaPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="status">Status</Label>
-                      <Select>
+                      <Select value={formData.status} onValueChange={(value) => setFormData({...formData, status: value})}>
                         <SelectTrigger>
                           <SelectValue placeholder="Pilih Status" />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="aktif">Aktif</SelectItem>
-                          <SelectItem value="magang">Magang</SelectItem>
-                          <SelectItem value="selesai">Selesai</SelectItem>
+                          <SelectItem value="tidak_aktif">Tidak Aktif</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="guru">Guru Pembimbing (opsional)</Label>
-                      <Select>
+                      <Select 
+                        value={formData.guru_id?.toString() || 'none'} 
+                        onValueChange={(value) => setFormData({...formData, guru_id: value === 'none' ? null : parseInt(value)})}
+                      >
                         <SelectTrigger>
                           <SelectValue placeholder="Pilih Guru" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="guru1">Pak Suryanto</SelectItem>
-                          <SelectItem value="guru2">Ibu Kartika</SelectItem>
-                          <SelectItem value="guru3">Pak Hendro</SelectItem>
+                          <SelectItem value="none">Tidak ada</SelectItem>
+                          {guruList.map((guru) => (
+                            <SelectItem key={guru.id} value={guru.id.toString()}>
+                              {guru.nama}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>
                   </div>
 
-                  {/* DUDI (opsional) */}
+                  {/* DUDI */}
                   <div className="space-y-2">
                     <Label htmlFor="dudi">DUDI (opsional)</Label>
-                    <Select>
+                    <Select 
+                      value={formData.dudi_id?.toString() || 'none'} 
+                      onValueChange={(value) => setFormData({...formData, dudi_id: value === 'none' ? null : parseInt(value)})}
+                    >
                       <SelectTrigger>
                         <SelectValue placeholder="Belum ada" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="dudi1">PT Kreatif Teknologi</SelectItem>
-                        <SelectItem value="dudi2">CV Digital Solusi</SelectItem>
-                        <SelectItem value="dudi3">PT Inovasi Mandiri</SelectItem>
+                        <SelectItem value="none">Tidak ada</SelectItem>
+                        {dudiList.map((dudi) => (
+                          <SelectItem key={dudi.id} value={dudi.id.toString()}>
+                            {dudi.nama_perusahaan}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -288,18 +542,24 @@ export default function ManajemenSiswaPage() {
                   {/* Alamat */}
                   <div className="space-y-2">
                     <Label htmlFor="alamat">Alamat</Label>
-                    <Textarea id="alamat" placeholder="Masukkan alamat lengkap" rows={3} />
+                    <Textarea 
+                      id="alamat" 
+                      placeholder="Masukkan alamat lengkap" 
+                      rows={3} 
+                      value={formData.alamat}
+                      onChange={(e) => setFormData({...formData, alamat: e.target.value})}
+                    />
                   </div>
-                </div>
 
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Batal
-                  </Button>
-                  <Button className="bg-[#ad46ff] hover:bg-[#9b36f0] text-white">
-                    Tambah Siswa
-                  </Button>
-                </DialogFooter>
+                  <DialogFooter>
+                    <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                      Batal
+                    </Button>
+                    <Button type="submit" className="bg-[#ad46ff] hover:bg-[#9b36f0] text-white">
+                      {isEditMode ? 'Update Siswa' : 'Tambah Siswa'}
+                    </Button>
+                  </DialogFooter>
+                </form>
               </DialogContent>
             </Dialog>
           </div>
@@ -372,55 +632,84 @@ export default function ManajemenSiswaPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {filteredSiswa.map((siswa) => (
-                  <tr key={siswa.nis} className="hover:bg-purple-50 transition-colors">
-                    <td className="px-4 py-4 text-sm text-gray-600">{siswa.nis}</td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-3">
-                        <Avatar className="h-8 w-8 bg-[#ad46ff]">
-                          <AvatarFallback className="bg-[#ad46ff] text-white text-xs">
-                            {siswa.nama.split(' ').map(n => n[0]).join('').substring(0, 2)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <span className="font-medium text-gray-800">{siswa.nama}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4 text-sm text-gray-600">{siswa.kelas}</td>
-                    <td className="px-4 py-4">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-xs text-gray-600">
-                          <Mail className="w-3 h-3 text-[#ad46ff]" />
-                          {siswa.email}
-                        </div>
-                        <div className="flex items-center gap-2 text-xs text-gray-600">
-                          <Phone className="w-3 h-3 text-[#ad46ff]" />
-                          {siswa.telepon}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <Badge className={`${siswa.statusColor} border-0`}>
-                        {siswa.statusLabel}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="text-sm">
-                        <p className="text-gray-800">{siswa.guruPembimbing}</p>
-                        <p className="text-xs text-gray-500">{siswa.dudi}</p>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-2">
-                        <Button size="icon" variant="ghost" className="hover:bg-purple-50">
-                          <Edit className="w-4 h-4 text-blue-600" />
-                        </Button>
-                        <Button size="icon" variant="ghost" className="hover:bg-red-50">
-                          <Trash2 className="w-4 h-4 text-red-600" />
-                        </Button>
-                      </div>
+                {filteredSiswa.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                      Tidak ada data siswa
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredSiswa.map((siswa) => {
+                    const statusInfo = getStatusInfo(siswa);
+                    return (
+                      <tr key={siswa.id} className="hover:bg-purple-50 transition-colors">
+                        <td className="px-4 py-4 text-sm text-gray-600">{siswa.nis}</td>
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-3">
+                            <Avatar className="h-8 w-8 bg-[#ad46ff]">
+                              <AvatarFallback className="bg-[#ad46ff] text-white text-xs">
+                                {siswa.nama.split(' ').map(n => n[0]).join('').substring(0, 2)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <span className="font-medium text-gray-800">{siswa.nama}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4 text-sm text-gray-600">
+                          {siswa.kelas && siswa.jurusan ? `${siswa.kelas} - ${siswa.jurusan}` : siswa.kelas || '-'}
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 text-xs text-gray-600">
+                              <Mail className="w-3 h-3 text-[#ad46ff]" />
+                              {siswa.email}
+                            </div>
+                            {siswa.telepon && (
+                              <div className="flex items-center gap-2 text-xs text-gray-600">
+                                <Phone className="w-3 h-3 text-[#ad46ff]" />
+                                {siswa.telepon}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-4">
+                          <Badge className={`${statusInfo.color} border-0`}>
+                            {statusInfo.label}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="text-sm">
+                            <p className="text-gray-800">
+                              {siswa.guru?.nama || 'Belum ada'}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              {siswa.dudi?.nama_perusahaan || '-'}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-2">
+                            <Button 
+                              size="icon" 
+                              variant="ghost" 
+                              className="hover:bg-purple-50"
+                              onClick={() => handleEdit(siswa)}
+                            >
+                              <Edit className="w-4 h-4 text-blue-600" />
+                            </Button>
+                            <Button 
+                              size="icon" 
+                              variant="ghost" 
+                              className="hover:bg-red-50"
+                              onClick={() => handleDelete(siswa.id, siswa.nama)}
+                            >
+                              <Trash2 className="w-4 h-4 text-red-600" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -428,7 +717,7 @@ export default function ManajemenSiswaPage() {
           {/* Pagination */}
           <div className="flex items-center justify-between mt-4 pt-4 border-t">
             <p className="text-sm text-gray-600">
-              Halaman 1 dari 1
+              Menampilkan {filteredSiswa.length} dari {siswaData.length} siswa
             </p>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="outline" disabled>

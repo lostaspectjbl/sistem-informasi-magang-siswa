@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Users, UserCheck, GraduationCap, TrendingUp, Search, Plus, Edit, Trash2, Mail, Phone } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -23,129 +23,251 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { supabase } from '@/lib/supabase';
+import { Database } from '@/types';
 
-interface Guru {
-  id: number;
+type Guru = Database['public']['Tables']['guru']['Row'];
+
+interface GuruWithCount extends Guru {
+  siswa_count?: number;
+}
+
+interface FormData {
   nip: string;
   nama: string;
-  mataPelajaran: string;
   email: string;
   telepon: string;
-  status: 'aktif' | 'tidak aktif';
-  siswa: number;
+  alamat: string;
 }
 
 export default function ManajemenGuruPage() {
-  const [guruList, setGuruList] = useState<Guru[]>([
-    { id: 1, nip: '197501012000031001', nama: 'Suryanto, S.Pd', mataPelajaran: 'Pemrograman Web & Mobile', email: 'suryanto@teacher.sch.id', telepon: '081234567800', status: 'aktif', siswa: 4 },
-    { id: 2, nip: '198002052005012002', nama: 'Kartika Sari, S.Kom', mataPelajaran: 'Basis Data & Sistem Informasi', email: 'kartika@teacher.sch.id', telepon: '081234567801', status: 'aktif', siswa: 2 },
-    { id: 3, nip: '198505152010011003', nama: 'Agus Wahyudi, S.T', mataPelajaran: 'Jaringan Komputer', email: 'agus@teacher.sch.id', telepon: '081234567802', status: 'aktif', siswa: 0 },
-    { id: 4, nip: '199003202015012004', nama: 'Rina Puspitasari, S.Pd', mataPelajaran: 'Desain Grafis & Multimedia', email: 'rina@teacher.sch.id', telepon: '081234567803', status: 'aktif', siswa: 0 },
-    { id: 5, nip: '198812252012011005', nama: 'Bambang Priyanto, S.Kom', mataPelajaran: 'Pemrograman Desktop & Game', email: 'bambang@teacher.sch.id', telepon: '081234567804', status: 'aktif', siswa: 0 },
-  ]);
-
+  const [guruList, setGuruList] = useState<GuruWithCount[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('Semua Status');
-  const [entriesPerPage, setEntriesPerPage] = useState('5');
+  const [entriesPerPage, setEntriesPerPage] = useState('10');
   const [showDialog, setShowDialog] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [form, setForm] = useState({
-    nip: '',
-    nama: '',
-    mataPelajaran: '',
-    email: '',
-    telepon: '',
-    status: 'aktif' as 'aktif' | 'tidak aktif',
+  const [loading, setLoading] = useState(true);
+  
+  const [stats, setStats] = useState({
+    totalGuru: 0,
+    guruAktif: 0,
+    totalSiswaBimbingan: 0,
+    rataRataSiswa: 0,
   });
 
-  // Calculate stats
-  const totalGuru = guruList.length;
-  const guruAktif = guruList.filter(g => g.status === 'aktif').length;
-  const totalSiswaBimbingan = guruList.reduce((sum, g) => sum + g.siswa, 0);
-  const rataRataSiswa = totalGuru > 0 ? Math.round(totalSiswaBimbingan / totalGuru) : 0;
+  const [form, setForm] = useState<FormData>({
+    nip: '',
+    nama: '',
+    email: '',
+    telepon: '',
+    alamat: '',
+  });
 
-  const stats = [
-    { title: 'Total Guru', value: totalGuru.toString(), subtitle: 'Guru terdaftar', icon: Users, color: 'text-gray-800' },
-    { title: 'Guru Aktif', value: guruAktif.toString(), subtitle: 'Guru aktif mengajar', icon: UserCheck, color: 'text-green-600' },
-    { title: 'Total Siswa Bimbingan', value: totalSiswaBimbingan.toString(), subtitle: 'Siswa dibimbing', icon: GraduationCap, color: 'text-blue-600' },
-    { title: 'Rata-rata Siswa', value: rataRataSiswa.toString(), subtitle: 'Per guru', icon: TrendingUp, color: 'text-purple-600' },
-  ];
+  useEffect(() => {
+    fetchAllData();
+  }, []);
+
+  async function fetchAllData() {
+    try {
+      setLoading(true);
+      await Promise.all([
+        fetchGuru(),
+        fetchStats(),
+      ]);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function fetchGuru() {
+    try {
+      // Fetch guru with siswa count
+      const { data, error } = await (supabase as any)
+        .from('guru')
+        .select(`
+          *,
+          siswa (count)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      // Transform data to include siswa count
+      const guruWithCount: GuruWithCount[] = (data || []).map((guru: any) => ({
+        ...guru,
+        siswa_count: guru.siswa?.[0]?.count || 0,
+      }));
+
+      setGuruList(guruWithCount);
+    } catch (error) {
+      console.error('Error fetching guru:', error);
+    }
+  }
+
+  async function fetchStats() {
+    try {
+      // Total Guru
+      const { count: totalGuru } = await (supabase as any)
+        .from('guru')
+        .select('*', { count: 'exact', head: true });
+
+      // Total Siswa dengan Pembimbing
+      const { count: totalSiswaBimbingan } = await (supabase as any)
+        .from('siswa')
+        .select('*', { count: 'exact', head: true })
+        .not('guru_id', 'is', null);
+
+      // Guru Aktif (yang punya siswa)
+      const { data: guruWithSiswa } = await (supabase as any)
+        .from('guru')
+        .select('id, siswa (count)')
+        .gt('siswa.count', 0);
+
+      const guruAktif = guruWithSiswa?.length || 0;
+      const rataRataSiswa = totalGuru && totalGuru > 0 
+        ? Math.round((totalSiswaBimbingan || 0) / totalGuru) 
+        : 0;
+
+      setStats({
+        totalGuru: totalGuru || 0,
+        guruAktif,
+        totalSiswaBimbingan: totalSiswaBimbingan || 0,
+        rataRataSiswa,
+      });
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+    }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+
+    try {
+      if (editingId) {
+        // Update
+        const { error } = await (supabase as any)
+          .from('guru')
+          .update({
+            nip: form.nip,
+            nama: form.nama,
+            email: form.email,
+            telepon: form.telepon,
+            alamat: form.alamat,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', editingId);
+
+        if (error) throw error;
+        alert('Guru berhasil diupdate!');
+      } else {
+        // Insert
+        const { error } = await (supabase as any)
+          .from('guru')
+          .insert([{
+            nip: form.nip,
+            nama: form.nama,
+            email: form.email,
+            telepon: form.telepon,
+            alamat: form.alamat,
+          }]);
+
+        if (error) throw error;
+        alert('Guru berhasil ditambahkan!');
+      }
+
+      setShowDialog(false);
+      resetForm();
+      fetchAllData();
+    } catch (error: any) {
+      console.error('Error saving guru:', error);
+      alert(`Error: ${error.message}`);
+    }
+  }
+
+  async function handleDelete(id: number, nama: string) {
+    if (!confirm(`Apakah Anda yakin ingin menghapus data guru ${nama}?`)) return;
+
+    try {
+      const { error } = await (supabase as any)
+        .from('guru')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      
+      alert('Guru berhasil dihapus!');
+      fetchAllData();
+    } catch (error: any) {
+      console.error('Error deleting guru:', error);
+      alert(`Error: ${error.message}`);
+    }
+  }
+
+  function handleEdit(guru: GuruWithCount) {
+    setForm({
+      nip: guru.nip || '',
+      nama: guru.nama,
+      email: guru.email,
+      telepon: guru.telepon || '',
+      alamat: guru.alamat || '',
+    });
+    setEditingId(guru.id);
+    setShowDialog(true);
+  }
+
+  function resetForm() {
+    setForm({
+      nip: '',
+      nama: '',
+      email: '',
+      telepon: '',
+      alamat: '',
+    });
+    setEditingId(null);
+  }
+
+  function handleCancel() {
+    setShowDialog(false);
+    resetForm();
+  }
 
   // Filter data
   const filteredGuru = guruList.filter((guru) => {
+    const hasStudents = (guru.siswa_count || 0) > 0;
+    
     const matchSearch =
       guru.nama.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      guru.nip.includes(searchTerm) ||
-      guru.mataPelajaran.toLowerCase().includes(searchTerm.toLowerCase());
+      (guru.nip && guru.nip.includes(searchTerm)) ||
+      guru.email.toLowerCase().includes(searchTerm.toLowerCase());
 
-    const matchStatus = filterStatus === 'Semua Status' || 
-      (filterStatus === 'Aktif' && guru.status === 'aktif') ||
-      (filterStatus === 'Tidak Aktif' && guru.status === 'tidak aktif');
+    const matchStatus = 
+      filterStatus === 'Semua Status' || 
+      (filterStatus === 'Aktif' && hasStudents) ||
+      (filterStatus === 'Tidak Aktif' && !hasStudents);
 
     return matchSearch && matchStatus;
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const statsCards = [
+    { title: 'Total Guru', value: stats.totalGuru.toString(), subtitle: 'Guru terdaftar', icon: Users, color: 'text-gray-800' },
+    { title: 'Guru Aktif', value: stats.guruAktif.toString(), subtitle: 'Guru aktif membimbing', icon: UserCheck, color: 'text-green-600' },
+    { title: 'Total Siswa Bimbingan', value: stats.totalSiswaBimbingan.toString(), subtitle: 'Siswa dibimbing', icon: GraduationCap, color: 'text-blue-600' },
+    { title: 'Rata-rata Siswa', value: stats.rataRataSiswa.toString(), subtitle: 'Per guru', icon: TrendingUp, color: 'text-purple-600' },
+  ];
 
-    if (form.nip && form.nama && form.mataPelajaran && form.email && form.telepon) {
-      if (editingId) {
-        // Update existing guru
-        setGuruList(guruList.map(g =>
-          g.id === editingId
-            ? { ...g, nip: form.nip, nama: form.nama, mataPelajaran: form.mataPelajaran, email: form.email, telepon: form.telepon, status: form.status }
-            : g
-        ));
-        setEditingId(null);
-      } else {
-        // Add new guru
-        const newGuru: Guru = {
-          id: Math.max(...guruList.map(g => g.id), 0) + 1,
-          nip: form.nip,
-          nama: form.nama,
-          mataPelajaran: form.mataPelajaran,
-          email: form.email,
-          telepon: form.telepon,
-          status: form.status,
-          siswa: 0,
-        };
-        setGuruList([...guruList, newGuru]);
-      }
-
-      // Reset form
-      setForm({ nip: '', nama: '', mataPelajaran: '', email: '', telepon: '', status: 'aktif' });
-      setShowDialog(false);
-    }
-  };
-
-  const handleEdit = (guru: Guru) => {
-    setForm({
-      nip: guru.nip,
-      nama: guru.nama,
-      mataPelajaran: guru.mataPelajaran,
-      email: guru.email,
-      telepon: guru.telepon,
-      status: guru.status,
-    });
-    setEditingId(guru.id);
-    setShowDialog(true);
-  };
-
-  const handleDelete = (id: number) => {
-    if (confirm('Apakah Anda yakin ingin menghapus data guru ini?')) {
-      setGuruList(guruList.filter(g => g.id !== id));
-    }
-  };
-
-  const handleCancel = () => {
-    setShowDialog(false);
-    setEditingId(null);
-    setForm({ nip: '', nama: '', mataPelajaran: '', email: '', telepon: '', status: 'aktif' });
-  };
-
-  const getStatusColor = (status: string) => {
-    return status === 'aktif' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
-  };
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#ad46ff] mx-auto mb-4"></div>
+          <p className="text-gray-600">Memuat data...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -157,7 +279,7 @@ export default function ManajemenGuruPage() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((stat, index) => {
+        {statsCards.map((stat, index) => {
           const Icon = stat.icon;
           return (
             <Card key={index}>
@@ -188,7 +310,10 @@ export default function ManajemenGuruPage() {
             </div>
 
             {/* Tambah Guru Dialog */}
-            <Dialog open={showDialog} onOpenChange={setShowDialog}>
+            <Dialog open={showDialog} onOpenChange={(open) => {
+              setShowDialog(open);
+              if (!open) resetForm();
+            }}>
               <Button
                 onClick={() => setShowDialog(true)}
                 className="bg-purple-500 hover:bg-purple-600 text-white"
@@ -210,15 +335,12 @@ export default function ManajemenGuruPage() {
                 <form onSubmit={handleSubmit} className="space-y-4 py-4">
                   {/* NIP */}
                   <div className="space-y-2">
-                    <Label htmlFor="nip">
-                      NIP <span className="text-red-500">*</span>
-                    </Label>
+                    <Label htmlFor="nip">NIP</Label>
                     <Input
                       id="nip"
                       value={form.nip}
                       onChange={(e) => setForm({ ...form, nip: e.target.value })}
-                      placeholder="Masukkan NIP"
-                      required
+                      placeholder="Masukkan NIP (opsional)"
                     />
                   </div>
 
@@ -232,20 +354,6 @@ export default function ManajemenGuruPage() {
                       value={form.nama}
                       onChange={(e) => setForm({ ...form, nama: e.target.value })}
                       placeholder="Masukkan nama lengkap dengan gelar"
-                      required
-                    />
-                  </div>
-
-                  {/* Mata Pelajaran */}
-                  <div className="space-y-2">
-                    <Label htmlFor="mataPelajaran">
-                      Mata Pelajaran / Bidang Keahlian <span className="text-red-500">*</span>
-                    </Label>
-                    <Input
-                      id="mataPelajaran"
-                      value={form.mataPelajaran}
-                      onChange={(e) => setForm({ ...form, mataPelajaran: e.target.value })}
-                      placeholder="Contoh: Pemrograman Web & Mobile"
                       required
                     />
                   </div>
@@ -266,33 +374,25 @@ export default function ManajemenGuruPage() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="telepon">
-                        Telepon <span className="text-red-500">*</span>
-                      </Label>
+                      <Label htmlFor="telepon">Telepon</Label>
                       <Input
                         id="telepon"
                         value={form.telepon}
                         onChange={(e) => setForm({ ...form, telepon: e.target.value })}
                         placeholder="08xxxxxxxxxx"
-                        required
                       />
                     </div>
                   </div>
 
-                  {/* Status */}
+                  {/* Alamat */}
                   <div className="space-y-2">
-                    <Label htmlFor="status">
-                      Status <span className="text-red-500">*</span>
-                    </Label>
-                    <Select value={form.status} onValueChange={(value: 'aktif' | 'tidak aktif') => setForm({ ...form, status: value })}>
-                      <SelectTrigger id="status">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="aktif">Aktif</SelectItem>
-                        <SelectItem value="tidak aktif">Tidak Aktif</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label htmlFor="alamat">Alamat</Label>
+                    <Input
+                      id="alamat"
+                      value={form.alamat}
+                      onChange={(e) => setForm({ ...form, alamat: e.target.value })}
+                      placeholder="Masukkan alamat lengkap"
+                    />
                   </div>
 
                   <DialogFooter className="gap-2 sm:gap-0">
@@ -326,8 +426,8 @@ export default function ManajemenGuruPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="Semua Status">Semua Status</SelectItem>
-                <SelectItem value="Aktif">Aktif</SelectItem>
-                <SelectItem value="Tidak Aktif">Tidak Aktif</SelectItem>
+                <SelectItem value="Aktif">Aktif (Ada Siswa)</SelectItem>
+                <SelectItem value="Tidak Aktif">Tidak Aktif (Belum Ada Siswa)</SelectItem>
               </SelectContent>
             </Select>
 
@@ -356,72 +456,89 @@ export default function ManajemenGuruPage() {
                 <tr>
                   <th className="px-4 py-3 text-xs font-medium text-gray-700 uppercase">NIP</th>
                   <th className="px-4 py-3 text-xs font-medium text-gray-700 uppercase">Nama</th>
-                  <th className="px-4 py-3 text-xs font-medium text-gray-700 uppercase">Mata Pelajaran</th>
                   <th className="px-4 py-3 text-xs font-medium text-gray-700 uppercase">Kontak</th>
+                  <th className="px-4 py-3 text-xs font-medium text-gray-700 uppercase">Alamat</th>
                   <th className="px-4 py-3 text-xs font-medium text-gray-700 uppercase">Siswa</th>
                   <th className="px-4 py-3 text-xs font-medium text-gray-700 uppercase">Status</th>
                   <th className="px-4 py-3 text-xs font-medium text-gray-700 uppercase">Aksi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {filteredGuru.map((guru) => (
-                  <tr key={guru.id} className="hover:bg-purple-50 transition-colors">
-                    <td className="px-4 py-4 text-sm text-gray-600">{guru.nip}</td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-3">
-                        <Avatar className="h-8 w-8 bg-[#0891b2]">
-                          <AvatarFallback className="bg-purple-500 text-white text-xs">
-                            {guru.nama.split(' ').map(n => n[0]).join('').substring(0, 2)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <span className="font-medium text-gray-800">{guru.nama}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4 text-sm text-gray-600">{guru.mataPelajaran}</td>
-                    <td className="px-4 py-4">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-xs text-gray-600">
-                          <Mail className="w-3 h-3 text-[#ad46ff]" />
-                          {guru.email}
-                        </div>
-                        <div className="flex items-center gap-2 text-xs text-gray-600">
-                          <Phone className="w-3 h-3 text-[#ad46ff]" />
-                          {guru.telepon}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <Badge className="bg-yellow-100 text-yellow-700 border-0">
-                        {guru.siswa} siswa
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-4">
-                      <Badge className={`${getStatusColor(guru.status)} border-0`}>
-                        {guru.status}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-2">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handleEdit(guru)}
-                          className="hover:bg-blue-50"
-                        >
-                          <Edit className="w-4 h-4 text-blue-600" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handleDelete(guru.id)}
-                          className="hover:bg-red-50"
-                        >
-                          <Trash2 className="w-4 h-4 text-red-600" />
-                        </Button>
-                      </div>
+                {filteredGuru.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                      Tidak ada data guru
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredGuru.map((guru) => {
+                    const siswaCount = guru.siswa_count || 0;
+                    const isActive = siswaCount > 0;
+                    
+                    return (
+                      <tr key={guru.id} className="hover:bg-purple-50 transition-colors">
+                        <td className="px-4 py-4 text-sm text-gray-600">{guru.nip || '-'}</td>
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-3">
+                            <Avatar className="h-8 w-8 bg-[#0891b2]">
+                              <AvatarFallback className="bg-purple-500 text-white text-xs">
+                                {guru.nama.split(' ').map(n => n[0]).join('').substring(0, 2)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <span className="font-medium text-gray-800">{guru.nama}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 text-xs text-gray-600">
+                              <Mail className="w-3 h-3 text-[#ad46ff]" />
+                              {guru.email}
+                            </div>
+                            {guru.telepon && (
+                              <div className="flex items-center gap-2 text-xs text-gray-600">
+                                <Phone className="w-3 h-3 text-[#ad46ff]" />
+                                {guru.telepon}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-4 text-sm text-gray-600">
+                          {guru.alamat || '-'}
+                        </td>
+                        <td className="px-4 py-4">
+                          <Badge className="bg-yellow-100 text-yellow-700 border-0">
+                            {siswaCount} siswa
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-4">
+                          <Badge className={`${isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'} border-0`}>
+                            {isActive ? 'Aktif' : 'Tidak Aktif'}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-2">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => handleEdit(guru)}
+                              className="hover:bg-blue-50"
+                            >
+                              <Edit className="w-4 h-4 text-blue-600" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => handleDelete(guru.id, guru.nama)}
+                              className="hover:bg-red-50"
+                            >
+                              <Trash2 className="w-4 h-4 text-red-600" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -429,7 +546,7 @@ export default function ManajemenGuruPage() {
           {/* Pagination */}
           <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
             <p className="text-sm text-gray-600">
-              Halaman 1 dari 1
+              Menampilkan {filteredGuru.length} dari {guruList.length} guru
             </p>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="outline" disabled>

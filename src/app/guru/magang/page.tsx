@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { createClient } from '@supabase/supabase-js';
 import {
   Users, GraduationCap, CheckCircle2, Clock,
-  Search, Edit2, Building2, ChevronUp, X
+  Search, Edit2, Building2, ChevronUp, X, AlertCircle
 } from 'lucide-react';
 
 import {
@@ -21,10 +22,17 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectValue, SelectContent, SelectItem, SelectTrigger
 } from "@/components/ui/select";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
-// Interface untuk tipe data Student
+// Initialize Supabase client
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+// Interface untuk tipe data
 interface Student {
   id: number;
+  siswa_id: number;
   name: string;
   company: string;
   period: string;
@@ -32,9 +40,32 @@ interface Student {
   score: string;
   startDate: string;
   endDate: string;
+  catatan?: string;
+}
+
+interface Stats {
+  totalSiswa: number;
+  magangAktif: number;
+  pending: number;
+  rataRataNilai: number;
+  siswaSelesai: number;
 }
 
 export default function GuruMagangPage() {
+  // State untuk data
+  const [students, setStudents] = useState<Student[]>([]);
+  const [stats, setStats] = useState<Stats>({
+    totalSiswa: 0,
+    magangAktif: 0,
+    pending: 0,
+    rataRataNilai: 0,
+    siswaSelesai: 0
+  });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [guruId, setGuruId] = useState<number>(2); // Default guru ID, sesuaikan dengan login
+
+  // State untuk filter dan pagination
   const [searchQuery, setSearchQuery] = useState('');
   const [itemsPerPage, setItemsPerPage] = useState('10');
   const [showFilter, setShowFilter] = useState(false);
@@ -44,37 +75,198 @@ export default function GuruMagangPage() {
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
   
-  // State untuk modal update status
+  // State untuk modal
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [updateStatus, setUpdateStatus] = useState('selesai');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [notes, setNotes] = useState('');
-
-  // State untuk modal input nilai
   const [showNilaiModal, setShowNilaiModal] = useState(false);
   const [nilaiAkhir, setNilaiAkhir] = useState('');
 
-  const students: Student[] = [
-    { id: 1, name: "Ahmad Rizki Ramadhan", company: "PT. Teknologi Nusantara", period: "1 Jul 2024 - 30 Sep 2024", statusBadge: "Aktif", score: "-", startDate: "01/07/2024", endDate: "30/09/2024" },
-    { id: 2, name: "Siti Nurhaliza", company: "CV. Digital Kreativa", period: "1 Jul 2024 - 30 Sep 2024", statusBadge: "Aktif", score: "-", startDate: "01/07/2024", endDate: "30/09/2024" },
-    { id: 3, name: "Dewi Lestari", company: "PT. Media Interaktif", period: "15 Jun 2024 - 15 Sep 2024", statusBadge: "Selesai", score: "0", startDate: "15/06/2024", endDate: "15/09/2024" },
-  ];
+  // Fetch data siswa magang
+  const fetchMagangData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
 
-  const stats = [
-    { label: "Total Siswa", value: "3", sublabel: "Siswa bimbingan", icon: Users },
-    { label: "Magang Aktif", value: "2", sublabel: "Sedang berlangsung", icon: GraduationCap },
-    { label: "Pending", value: "0", sublabel: "Menunggu approval", icon: Clock },
-    { label: "Rata-rata Nilai", value: "0", sublabel: "0 siswa selesai", icon: CheckCircle2 }
-  ];
+      // Query untuk mendapatkan data magang dengan join
+      const { data: magangData, error: magangError } = await supabase
+        .from('magang')
+        .select(`
+          id,
+          siswa_id,
+          dudi_id,
+          status,
+          nilai_akhir,
+          tanggal_mulai,
+          tanggal_selesai,
+          catatan,
+          siswa (
+            id,
+            nama,
+            nis
+          ),
+          dudi (
+            id,
+            nama_perusahaan
+          )
+        `)
+        .eq('guru_id', guruId)
+        .order('created_at', { ascending: false });
 
+      if (magangError) throw magangError;
+
+      // Transform data untuk UI
+      const transformedData: Student[] = (magangData || []).map((m: any) => ({
+        id: m.id,
+        siswa_id: m.siswa_id,
+        name: m.siswa?.nama || 'N/A',
+        company: m.dudi?.nama_perusahaan || 'N/A',
+        period: formatPeriod(m.tanggal_mulai, m.tanggal_selesai),
+        statusBadge: capitalizeStatus(m.status),
+        score: m.nilai_akhir?.toString() || '-',
+        startDate: m.tanggal_mulai ? formatDateForInput(m.tanggal_mulai) : '',
+        endDate: m.tanggal_selesai ? formatDateForInput(m.tanggal_selesai) : '',
+        catatan: m.catatan
+      }));
+
+      setStudents(transformedData);
+      calculateStats(transformedData);
+    } catch (err: any) {
+      setError(err.message || 'Gagal memuat data');
+      console.error('Error fetching data:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Calculate statistics
+  const calculateStats = (data: Student[]) => {
+    const total = data.length;
+    const aktif = data.filter(s => s.statusBadge === 'Aktif').length;
+    const pending = data.filter(s => s.statusBadge === 'Pending').length;
+    const selesai = data.filter(s => s.statusBadge === 'Selesai');
+    const scores = selesai.filter(s => s.score !== '-').map(s => parseFloat(s.score));
+    const avgScore = scores.length > 0 
+      ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) 
+      : 0;
+
+    setStats({
+      totalSiswa: total,
+      magangAktif: aktif,
+      pending: pending,
+      rataRataNilai: avgScore,
+      siswaSelesai: selesai.length
+    });
+  };
+
+  // Format helpers
+  const formatPeriod = (start: string | null, end: string | null) => {
+    if (!start || !end) return 'N/A';
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    const formatDate = (d: Date) => 
+      `${d.getDate()} ${['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'][d.getMonth()]} ${d.getFullYear()}`;
+    return `${formatDate(startDate)} - ${formatDate(endDate)}`;
+  };
+
+  const formatDateForInput = (dateStr: string) => {
+    const date = new Date(dateStr);
+    return date.toISOString().split('T')[0];
+  };
+
+  const capitalizeStatus = (status: string) => {
+    return status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();
+  };
+
+  // Handle update status magang
+  const handleSaveUpdate = async () => {
+    if (!selectedStudent) return;
+
+    try {
+      setLoading(true);
+      
+      const { error: updateError } = await supabase
+        .from('magang')
+        .update({
+          status: updateStatus,
+          tanggal_mulai: startDate,
+          tanggal_selesai: endDate,
+          catatan: notes,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', selectedStudent.id);
+
+      if (updateError) throw updateError;
+
+      // Log activity
+      await supabase.from('activity_log').insert({
+        user_id: guruId,
+        action: 'UPDATE',
+        entity: 'magang',
+        description: `Mengubah status magang siswa ${selectedStudent.name} menjadi ${updateStatus}`
+      });
+
+      setShowUpdateModal(false);
+      fetchMagangData(); // Refresh data
+    } catch (err: any) {
+      setError(err.message || 'Gagal menyimpan perubahan');
+      console.error('Error updating:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle input nilai
+  const handleSaveNilai = async () => {
+    if (!selectedStudent || !nilaiAkhir) return;
+
+    const nilai = parseInt(nilaiAkhir);
+    if (nilai < 0 || nilai > 100) {
+      setError('Nilai harus antara 0-100');
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const { error: updateError } = await supabase
+        .from('magang')
+        .update({
+          nilai_akhir: nilai,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', selectedStudent.id);
+
+      if (updateError) throw updateError;
+
+      // Log activity
+      await supabase.from('activity_log').insert({
+        user_id: guruId,
+        action: 'UPDATE',
+        entity: 'magang',
+        description: `Memberikan nilai ${nilai} untuk siswa ${selectedStudent.name}`
+      });
+
+      setShowNilaiModal(false);
+      fetchMagangData(); // Refresh data
+    } catch (err: any) {
+      setError(err.message || 'Gagal menyimpan nilai');
+      console.error('Error saving score:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Modal handlers
   const handleSelesaiClick = (student: Student) => {
     setSelectedStudent(student);
     setStartDate(student.startDate);
     setEndDate(student.endDate);
     setUpdateStatus('selesai');
-    setNotes('');
+    setNotes(student.catatan || '');
     setShowUpdateModal(true);
   };
 
@@ -84,29 +276,42 @@ export default function GuruMagangPage() {
     setShowNilaiModal(true);
   };
 
-  const handleSaveUpdate = () => {
-    // Logic untuk menyimpan perubahan status
-    console.log('Simpan update:', {
-      student: selectedStudent,
-      status: updateStatus,
-      startDate,
-      endDate,
-      notes
-    });
-    setShowUpdateModal(false);
-  };
+  // Filter students based on search and filters
+  const filteredStudents = students.filter(student => {
+    const matchSearch = !searchQuery || 
+      student.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      student.company.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    const matchStatus = !filterStatus || filterStatus === 'all' || 
+      student.statusBadge.toLowerCase() === filterStatus.toLowerCase();
 
-  const handleSaveNilai = () => {
-    // Logic untuk menyimpan nilai
-    console.log('Simpan nilai:', {
-      student: selectedStudent,
-      nilai: nilaiAkhir
-    });
-    setShowNilaiModal(false);
-  };
+    // Add more filter logic for year, month, date range if needed
+
+    return matchSearch && matchStatus;
+  });
+
+  // Initial data fetch
+  useEffect(() => {
+    fetchMagangData();
+  }, [guruId]);
+
+  const statsDisplay = [
+    { label: "Total Siswa", value: stats.totalSiswa.toString(), sublabel: "Siswa bimbingan", icon: Users },
+    { label: "Magang Aktif", value: stats.magangAktif.toString(), sublabel: "Sedang berlangsung", icon: GraduationCap },
+    { label: "Pending", value: stats.pending.toString(), sublabel: "Menunggu approval", icon: Clock },
+    { label: "Rata-rata Nilai", value: stats.rataRataNilai.toString(), sublabel: `${stats.siswaSelesai} siswa selesai`, icon: CheckCircle2 }
+  ];
 
   return (
     <div className="space-y-6">
+      {/* ERROR ALERT */}
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
       {/* HEADER */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-800 mb-2">
@@ -117,7 +322,7 @@ export default function GuruMagangPage() {
       
       {/* STATS */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-        {stats.map((s, idx) => (
+        {statsDisplay.map((s, idx) => (
           <Card key={idx}>
             <CardHeader className="flex flex-row justify-between pb-2">
               <CardTitle className="text-sm font-medium">{s.label}</CardTitle>
@@ -166,7 +371,6 @@ export default function GuruMagangPage() {
               <div className="mt-4 p-4 border rounded-lg bg-gray-50">
                 <h3 className="font-semibold mb-4">Filter Data Magang</h3>
                 
-                {/* Row 1: Status, Tahun, Bulan */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                   <div>
                     <label className="text-sm font-medium mb-2 block">Status Magang</label>
@@ -193,7 +397,6 @@ export default function GuruMagangPage() {
                         <SelectItem value="all">Semua Tahun</SelectItem>
                         <SelectItem value="2024">2024</SelectItem>
                         <SelectItem value="2023">2023</SelectItem>
-                        <SelectItem value="2022">2022</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -206,140 +409,107 @@ export default function GuruMagangPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">Semua Bulan</SelectItem>
-                        <SelectItem value="1">Januari</SelectItem>
-                        <SelectItem value="2">Februari</SelectItem>
-                        <SelectItem value="3">Maret</SelectItem>
-                        <SelectItem value="4">April</SelectItem>
-                        <SelectItem value="5">Mei</SelectItem>
-                        <SelectItem value="6">Juni</SelectItem>
-                        <SelectItem value="7">Juli</SelectItem>
-                        <SelectItem value="8">Agustus</SelectItem>
-                        <SelectItem value="9">September</SelectItem>
-                        <SelectItem value="10">Oktober</SelectItem>
-                        <SelectItem value="11">November</SelectItem>
-                        <SelectItem value="12">Desember</SelectItem>
+                        {['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'].map((month, i) => (
+                          <SelectItem key={i} value={(i + 1).toString()}>{month}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
                 </div>
 
-                {/* Row 2: Rentang Tanggal */}
-                <div>
-                  <label className="text-sm font-medium mb-2 block">Rentang Tanggal Magang</label>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-xs text-gray-500 mb-1 block">Dari Tanggal</label>
-                      <Input 
-                        type="date" 
-                        value={filterDateFrom}
-                        onChange={(e) => setFilterDateFrom(e.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-gray-500 mb-1 block">Sampai Tanggal</label>
-                      <Input 
-                        type="date"
-                        value={filterDateTo}
-                        onChange={(e) => setFilterDateTo(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Result Count */}
                 <div className="mt-4 text-sm text-gray-600">
-                  <span className="font-medium">{students.length}</span> data ditemukan
+                  <span className="font-medium">{filteredStudents.length}</span> data ditemukan
                 </div>
               </div>
             )}
           </div>
         </CardHeader>
 
-        {/* TABLE */}
         <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-3 text-left text-gray-700 text-sm font-semibold">Siswa</th>
-                  <th className="px-4 py-3 text-left text-gray-700 text-sm font-semibold">DUDI</th>
-                  <th className="px-4 py-3 text-left text-gray-700 text-sm font-semibold">Periode</th>
-                  <th className="px-4 py-3 text-left text-gray-700 text-sm font-semibold">Status</th>
-                  <th className="px-4 py-3 text-left text-gray-700 text-sm font-semibold">Nilai</th>
-                  <th className="px-4 py-3 text-left text-gray-700 text-sm font-semibold">Aksi</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {students.map((s) => (
-                  <tr key={s.id} className="border-b hover:bg-gray-50">
-
-                    <td className="px-4 py-4">
-                      <p className="font-medium text-gray-900">{s.name}</p>
-                    </td>
-
-                    <td className="px-4 py-4">
-                      <div className="flex gap-2 items-center">
-                        <Building2 className="w-4 h-4 text-gray-400" />
-                        <p className="text-gray-900">{s.company}</p>
-                      </div>
-                    </td>
-
-                    <td className="px-4 py-4">
-                      <p className="text-gray-600">{s.period}</p>
-                    </td>
-
-                    <td className="px-4 py-4">
-                      <Badge
-                        className={
-                          s.statusBadge === 'Aktif'
-                            ? "bg-green-100 text-green-700 hover:bg-green-100"
-                            : "bg-blue-100 text-blue-700 hover:bg-blue-100"
-                        }
-                      >
-                        {s.statusBadge}
-                      </Badge>
-                    </td>
-
-                    <td className="px-4 py-4">
-                      {s.score === "-" ? (
-                        <span className="text-gray-400">-</span>
-                      ) : (
-                        <span className="text-gray-900 font-medium">
-                          {s.score}
-                        </span>
-                      )}
-                    </td>
-
-                    <td className="px-4 py-4">
-                      <div className="flex gap-2">
-                        {s.statusBadge === 'Aktif' ? (
-                          <Button 
-                            className="bg-blue-600 hover:bg-blue-700 text-white"
-                            onClick={() => handleSelesaiClick(s)}
-                          >
-                            <CheckCircle2 className="w-4 h-4 mr-1" />
-                            Selesai
-                          </Button>
-                        ) : (
-                          <Button 
-                            className="bg-purple-600 hover:bg-purple-700 text-white"
-                            onClick={() => handleNilaiClick(s)}
-                          >
-                            <Edit2 className="w-4 h-4 mr-1" />
-                            Nilai
-                          </Button>
-                        )}
-                      </div>
-                    </td>
-
+          {loading ? (
+            <div className="text-center py-8">Loading...</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-gray-700 text-sm font-semibold">Siswa</th>
+                    <th className="px-4 py-3 text-left text-gray-700 text-sm font-semibold">DUDI</th>
+                    <th className="px-4 py-3 text-left text-gray-700 text-sm font-semibold">Periode</th>
+                    <th className="px-4 py-3 text-left text-gray-700 text-sm font-semibold">Status</th>
+                    <th className="px-4 py-3 text-left text-gray-700 text-sm font-semibold">Nilai</th>
+                    <th className="px-4 py-3 text-left text-gray-700 text-sm font-semibold">Aksi</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+
+                <tbody>
+                  {filteredStudents.map((s) => (
+                    <tr key={s.id} className="border-b hover:bg-gray-50">
+                      <td className="px-4 py-4">
+                        <p className="font-medium text-gray-900">{s.name}</p>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <div className="flex gap-2 items-center">
+                          <Building2 className="w-4 h-4 text-gray-400" />
+                          <p className="text-gray-900">{s.company}</p>
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <p className="text-gray-600">{s.period}</p>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <Badge
+                          className={
+                            s.statusBadge === 'Aktif'
+                              ? "bg-green-100 text-green-700 hover:bg-green-100"
+                              : s.statusBadge === 'Selesai'
+                              ? "bg-blue-100 text-blue-700 hover:bg-blue-100"
+                              : "bg-yellow-100 text-yellow-700 hover:bg-yellow-100"
+                          }
+                        >
+                          {s.statusBadge}
+                        </Badge>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        {s.score === "-" ? (
+                          <span className="text-gray-400">-</span>
+                        ) : (
+                          <span className="text-gray-900 font-medium">{s.score}</span>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <div className="flex gap-2">
+                          {s.statusBadge === 'Aktif' ? (
+                            <Button 
+                              className="bg-blue-600 hover:bg-blue-700 text-white"
+                              onClick={() => handleSelesaiClick(s)}
+                            >
+                              <CheckCircle2 className="w-4 h-4 mr-1" />
+                              Selesai
+                            </Button>
+                          ) : (
+                            <Button 
+                              className="bg-purple-600 hover:bg-purple-700 text-white"
+                              onClick={() => handleNilaiClick(s)}
+                            >
+                              <Edit2 className="w-4 h-4 mr-1" />
+                              Nilai
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
           
-          {/* PAGINATION */}
           <div className="flex justify-end items-center mt-4 gap-2">
             <span className="text-sm text-gray-600">Tampilkan:</span>
             <Select value={itemsPerPage} onValueChange={setItemsPerPage}>
@@ -356,7 +526,7 @@ export default function GuruMagangPage() {
         </CardContent>
       </Card>
 
-      {/* MODAL UPDATE STATUS MAGANG */}
+      {/* MODAL UPDATE STATUS */}
       <Dialog open={showUpdateModal} onOpenChange={setShowUpdateModal}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -380,11 +550,8 @@ export default function GuruMagangPage() {
           </DialogHeader>
 
           <div className="space-y-4 mt-4">
-            {/* Keputusan / Status */}
             <div>
-              <label className="text-sm font-medium mb-2 block">
-                Keputusan / Status
-              </label>
+              <label className="text-sm font-medium mb-2 block">Keputusan / Status</label>
               <Select value={updateStatus} onValueChange={setUpdateStatus}>
                 <SelectTrigger className="border-[#00d9d9] focus:ring-[#00d9d9]">
                   <SelectValue />
@@ -397,12 +564,9 @@ export default function GuruMagangPage() {
               </Select>
             </div>
 
-            {/* Tanggal Mulai dan Selesai */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="text-sm font-medium mb-2 block">
-                  Tanggal Mulai
-                </label>
+                <label className="text-sm font-medium mb-2 block">Tanggal Mulai</label>
                 <Input 
                   type="date" 
                   value={startDate}
@@ -410,9 +574,7 @@ export default function GuruMagangPage() {
                 />
               </div>
               <div>
-                <label className="text-sm font-medium mb-2 block">
-                  Tanggal Selesai
-                </label>
+                <label className="text-sm font-medium mb-2 block">Tanggal Selesai</label>
                 <Input 
                   type="date"
                   value={endDate}
@@ -421,11 +583,8 @@ export default function GuruMagangPage() {
               </div>
             </div>
 
-            {/* Catatan Tambahan */}
             <div>
-              <label className="text-sm font-medium mb-2 block">
-                Catatan Tambahan
-              </label>
+              <label className="text-sm font-medium mb-2 block">Catatan Tambahan</label>
               <Textarea 
                 placeholder="Opsional: Catatan untuk siswa..."
                 value={notes}
@@ -446,22 +605,21 @@ export default function GuruMagangPage() {
             <Button 
               className="bg-blue-600 hover:bg-blue-700 text-white"
               onClick={handleSaveUpdate}
+              disabled={loading}
             >
-              Simpan Perubahan
+              {loading ? 'Menyimpan...' : 'Simpan Perubahan'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* MODAL INPUT NILAI AKHIR */}
+      {/* MODAL INPUT NILAI */}
       <Dialog open={showNilaiModal} onOpenChange={setShowNilaiModal}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <div className="flex justify-between items-start">
               <div>
-                <DialogTitle className="text-xl font-bold">
-                  Input Nilai Akhir
-                </DialogTitle>
+                <DialogTitle className="text-xl font-bold">Input Nilai Akhir</DialogTitle>
                 <p className="text-sm text-gray-500 mt-1">
                   Berikan nilai akhir untuk <span className="font-semibold">{selectedStudent?.name}</span>
                 </p>
@@ -477,11 +635,8 @@ export default function GuruMagangPage() {
           </DialogHeader>
 
           <div className="space-y-4 mt-4">
-            {/* Input Nilai */}
             <div>
-              <label className="text-sm font-medium mb-2 block">
-                Nilai Akhir (0-100)
-              </label>
+              <label className="text-sm font-medium mb-2 block">Nilai Akhir (0-100)</label>
               <Input 
                 type="number"
                 min="0"
@@ -504,8 +659,9 @@ export default function GuruMagangPage() {
             <Button 
               className="bg-[#00d9d9] hover:bg-[#00c0c0] text-white"
               onClick={handleSaveNilai}
+              disabled={loading}
             >
-              Simpan Nilai
+              {loading ? 'Menyimpan...' : 'Simpan Nilai'}
             </Button>
           </DialogFooter>
         </DialogContent>

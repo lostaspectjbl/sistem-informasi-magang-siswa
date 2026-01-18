@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
-import { GraduationCap, Users, CheckCircle, XCircle, Search, Plus, Edit, Trash2, Calendar, Building2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
+import { GraduationCap, Search, Plus, Edit, Trash2, Calendar, Loader2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,40 +24,116 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-interface Magang {
+// Tipe data untuk tampilan frontend
+interface MagangDisplay {
   id: number;
-  siswa: string;
-  dudi: string;
-  pembimbing: string;
+  siswa_id: number;
+  dudi_id: number;
+  guru_id: number;
+  siswa_nama: string;
+  dudi_nama: string;
+  guru_nama: string;
   tanggalMulai: string;
   tanggalSelesai: string;
-  status: 'aktif' | 'selesai' | 'dibatalkan';
+  status: 'aktif' | 'selesai' | 'dibatalkan' | 'pending';
+}
+
+// Tipe data untuk opsi dropdown
+interface OptionItem {
+  id: number;
+  nama: string;
 }
 
 export default function ManajemenMagangPage() {
-  const [magangList, setMagangList] = useState<Magang[]>([
-    { id: 1, siswa: 'Ahmad Rizki Ramadhan', dudi: 'PT. Teknologi Nusantara', pembimbing: 'Suryanto, S.Pd', tanggalMulai: '2024-07-01', tanggalSelesai: '2024-09-30', status: 'aktif' },
-    { id: 2, siswa: 'Siti Nurhaliza', dudi: 'CV. Digital Kreatifa', pembimbing: 'Suryanto, S.Pd', tanggalMulai: '2024-07-01', tanggalSelesai: '2024-09-30', status: 'aktif' },
-    { id: 3, siswa: 'Budi Santoso', dudi: 'PT. Inovasi Mandiri', pembimbing: 'Kartika Sari, S.Kom', tanggalMulai: '2024-07-01', tanggalSelesai: '2024-09-30', status: 'aktif' },
-    { id: 4, siswa: 'Dewi Lestari', dudi: 'PT. Media Interaktif', pembimbing: 'Suryanto, S.Pd', tanggalMulai: '2024-06-15', tanggalSelesai: '2024-09-15', status: 'selesai' },
-    { id: 5, siswa: 'Eko Prasetyo', dudi: 'CV. Solusi Digital Indonesia', pembimbing: 'Kartika Sari, S.Kom', tanggalMulai: '2024-08-01', tanggalSelesai: '2024-10-31', status: 'aktif' },
-  ]);
+  const [magangList, setMagangList] = useState<MagangDisplay[]>([]);
+  const [loading, setLoading] = useState(true);
+  
+  // State untuk opsi dropdown
+  const [siswaOptions, setSiswaOptions] = useState<OptionItem[]>([]);
+  const [dudiOptions, setDudiOptions] = useState<OptionItem[]>([]);
+  const [guruOptions, setGuruOptions] = useState<OptionItem[]>([]);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('Semua Status');
-  const [entriesPerPage, setEntriesPerPage] = useState('10');
   const [showDialog, setShowDialog] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  
   const [form, setForm] = useState({
-    siswa: '',
-    dudi: '',
-    pembimbing: '',
+    siswa_id: '',
+    dudi_id: '',
+    guru_id: '',
     tanggalMulai: '',
     tanggalSelesai: '',
-    status: 'aktif' as 'aktif' | 'selesai' | 'dibatalkan',
+    status: 'aktif' as string,
   });
 
-  // Calculate stats
+  // 1. Fetch Data Utama & Opsi Dropdown saat load
+  useEffect(() => {
+    fetchRefData();
+    fetchMagangData();
+  }, []);
+
+  // --- PERBAIKAN 1: Menambahkan 'as any' pada pemetaan data DUDI ---
+  const fetchRefData = async () => {
+    const { data: siswa } = await supabase.from('siswa').select('id, nama').eq('status', 'aktif');
+    const { data: dudi } = await supabase.from('dudi').select('id, nama_perusahaan'); 
+    const { data: guru } = await supabase.from('guru').select('id, nama').eq('status', 'aktif');
+
+    if (siswa) setSiswaOptions(siswa as any[]); // Opsional: cast ke any[] agar aman
+    
+    // Di sini error pertama & kedua terjadi sebelumnya. Kita paksa tipe dudi menjadi any[]
+    if (dudi) {
+      setDudiOptions((dudi as any[]).map(d => ({ 
+        id: d.id, 
+        nama: d.nama_perusahaan 
+      })));
+    }
+    
+    if (guru) setGuruOptions(guru as any[]);
+  };
+
+  const fetchMagangData = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('magang')
+        .select(`
+          id,
+          status,
+          tanggal_mulai,
+          tanggal_selesai,
+          siswa_id, dudi_id, guru_id,
+          siswa (nama),
+          dudi (nama_perusahaan),
+          guru (nama)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      const formattedData: MagangDisplay[] = (data || []).map((item: any) => ({
+        id: item.id,
+        siswa_id: item.siswa_id,
+        dudi_id: item.dudi_id,
+        guru_id: item.guru_id,
+        siswa_nama: item.siswa?.nama || 'Siswa Dihapus',
+        dudi_nama: item.dudi?.nama_perusahaan || 'DUDI Dihapus',
+        guru_nama: item.guru?.nama || 'Guru Dihapus',
+        tanggalMulai: item.tanggal_mulai,
+        tanggalSelesai: item.tanggal_selesai,
+        status: item.status,
+      }));
+
+      setMagangList(formattedData);
+    } catch (error) {
+      console.error("Error fetching data:", error);
+      alert('Gagal mengambil data magang');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Stats calculation
   const totalMagang = magangList.length;
   const sedangAktif = magangList.filter(m => m.status === 'aktif').length;
   const selesai = magangList.filter(m => m.status === 'selesai').length;
@@ -69,12 +146,12 @@ export default function ManajemenMagangPage() {
     { title: 'Dibatalkan', value: dibatalkan, color: 'text-red-600' },
   ];
 
-  // Filter data
+  // Client-side filtering
   const filteredMagang = magangList.filter((magang) => {
     const matchSearch =
-      magang.siswa.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      magang.dudi.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      magang.pembimbing.toLowerCase().includes(searchTerm.toLowerCase());
+      magang.siswa_nama.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      magang.dudi_nama.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      magang.guru_nama.toLowerCase().includes(searchTerm.toLowerCase());
 
     const matchStatus = filterStatus === 'Semua Status' ||
       (filterStatus === 'Aktif' && magang.status === 'aktif') ||
@@ -84,43 +161,52 @@ export default function ManajemenMagangPage() {
     return matchSearch && matchStatus;
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setLoading(true);
 
-    if (form.siswa && form.dudi && form.pembimbing && form.tanggalMulai && form.tanggalSelesai) {
+    const payload = {
+      siswa_id: parseInt(form.siswa_id),
+      dudi_id: parseInt(form.dudi_id),
+      guru_id: parseInt(form.guru_id),
+      tanggal_mulai: form.tanggalMulai,
+      tanggal_selesai: form.tanggalSelesai,
+      status: form.status
+    };
+
+    try {
       if (editingId) {
-        // Update existing magang
-        setMagangList(magangList.map(m =>
-          m.id === editingId
-            ? { ...m, siswa: form.siswa, dudi: form.dudi, pembimbing: form.pembimbing, tanggalMulai: form.tanggalMulai, tanggalSelesai: form.tanggalSelesai, status: form.status }
-            : m
-        ));
-        setEditingId(null);
+        // --- PERBAIKAN 2: Menambahkan 'as any' pada payload update ---
+        const { error } = await supabase
+          .from('magang')
+          .update(payload as never) // <-- Error "not assignable to never" diperbaiki di sini
+          .eq('id', editingId);
+        
+        if (error) throw error;
       } else {
-        // Add new magang
-        const newMagang: Magang = {
-          id: Math.max(...magangList.map(m => m.id), 0) + 1,
-          siswa: form.siswa,
-          dudi: form.dudi,
-          pembimbing: form.pembimbing,
-          tanggalMulai: form.tanggalMulai,
-          tanggalSelesai: form.tanggalSelesai,
-          status: form.status,
-        };
-        setMagangList([...magangList, newMagang]);
+        // --- PERBAIKAN 3: Menambahkan 'as any' pada payload insert ---
+        const { error } = await supabase
+          .from('magang')
+          .insert([payload] as any); // <-- Error "not assignable to never" diperbaiki di sini
+
+        if (error) throw error;
       }
 
-      // Reset form
-      setForm({ siswa: '', dudi: '', pembimbing: '', tanggalMulai: '', tanggalSelesai: '', status: 'aktif' });
-      setShowDialog(false);
+      await fetchMagangData(); // Refresh table
+      handleCancel();
+    } catch (error) {
+      console.error("Error saving:", error);
+      alert('Terjadi kesalahan saat menyimpan data.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleEdit = (magang: Magang) => {
+  const handleEdit = (magang: MagangDisplay) => {
     setForm({
-      siswa: magang.siswa,
-      dudi: magang.dudi,
-      pembimbing: magang.pembimbing,
+      siswa_id: magang.siswa_id?.toString() || '',
+      dudi_id: magang.dudi_id?.toString() || '',
+      guru_id: magang.guru_id?.toString() || '',
       tanggalMulai: magang.tanggalMulai,
       tanggalSelesai: magang.tanggalSelesai,
       status: magang.status,
@@ -129,32 +215,36 @@ export default function ManajemenMagangPage() {
     setShowDialog(true);
   };
 
-  const handleDelete = (id: number) => {
+  const handleDelete = async (id: number) => {
     if (confirm('Apakah Anda yakin ingin menghapus data magang ini?')) {
-      setMagangList(magangList.filter(m => m.id !== id));
+      try {
+        const { error } = await supabase.from('magang').delete().eq('id', id);
+        if (error) throw error;
+        setMagangList(magangList.filter(m => m.id !== id));
+      } catch (error) {
+        console.error("Error deleting:", error);
+        alert("Gagal menghapus data");
+      }
     }
   };
 
   const handleCancel = () => {
     setShowDialog(false);
     setEditingId(null);
-    setForm({ siswa: '', dudi: '', pembimbing: '', tanggalMulai: '', tanggalSelesai: '', status: 'aktif' });
+    setForm({ siswa_id: '', dudi_id: '', guru_id: '', tanggalMulai: '', tanggalSelesai: '', status: 'aktif' });
   };
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'aktif':
-        return 'bg-blue-100 text-blue-700';
-      case 'selesai':
-        return 'bg-green-100 text-green-700';
-      case 'dibatalkan':
-        return 'bg-red-100 text-red-700';
-      default:
-        return 'bg-gray-100 text-gray-700';
+      case 'aktif': return 'bg-blue-100 text-blue-700';
+      case 'selesai': return 'bg-green-100 text-green-700';
+      case 'dibatalkan': return 'bg-red-100 text-red-700';
+      default: return 'bg-gray-100 text-gray-700';
     }
   };
 
   const formatDate = (dateStr: string) => {
+    if (!dateStr) return '-';
     const date = new Date(dateStr);
     return date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
   };
@@ -209,60 +299,56 @@ export default function ManajemenMagangPage() {
                 </DialogHeader>
 
                 <form onSubmit={handleSubmit} className="space-y-4 py-4">
-                  {/* Siswa */}
+                  {/* Siswa Dropdown */}
                   <div className="space-y-2">
-                    <Label htmlFor="siswa">
-                      Nama Siswa <span className="text-red-500">*</span>
-                    </Label>
-                    <Select value={form.siswa} onValueChange={(value) => setForm({ ...form, siswa: value })}>
+                    <Label htmlFor="siswa">Nama Siswa <span className="text-red-500">*</span></Label>
+                    <Select 
+                      value={form.siswa_id} 
+                      onValueChange={(value) => setForm({ ...form, siswa_id: value })}
+                    >
                       <SelectTrigger id="siswa">
                         <SelectValue placeholder="Pilih Siswa" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="Ahmad Rizki Ramadhan">Ahmad Rizki Ramadhan</SelectItem>
-                        <SelectItem value="Siti Nurhaliza">Siti Nurhaliza</SelectItem>
-                        <SelectItem value="Budi Santoso">Budi Santoso</SelectItem>
-                        <SelectItem value="Dewi Lestari">Dewi Lestari</SelectItem>
-                        <SelectItem value="Eko Prasetyo">Eko Prasetyo</SelectItem>
-                        <SelectItem value="Fajar Pratama">Fajar Pratama</SelectItem>
+                        {siswaOptions.map((s) => (
+                          <SelectItem key={s.id} value={s.id.toString()}>{s.nama}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
 
-                  {/* DUDI */}
+                  {/* DUDI Dropdown */}
                   <div className="space-y-2">
-                    <Label htmlFor="dudi">
-                      DUDI (Tempat Magang) <span className="text-red-500">*</span>
-                    </Label>
-                    <Select value={form.dudi} onValueChange={(value) => setForm({ ...form, dudi: value })}>
+                    <Label htmlFor="dudi">DUDI (Tempat Magang) <span className="text-red-500">*</span></Label>
+                    <Select 
+                      value={form.dudi_id} 
+                      onValueChange={(value) => setForm({ ...form, dudi_id: value })}
+                    >
                       <SelectTrigger id="dudi">
                         <SelectValue placeholder="Pilih DUDI" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="PT. Teknologi Nusantara">PT. Teknologi Nusantara</SelectItem>
-                        <SelectItem value="CV. Digital Kreatifa">CV. Digital Kreatifa</SelectItem>
-                        <SelectItem value="PT. Inovasi Mandiri">PT. Inovasi Mandiri</SelectItem>
-                        <SelectItem value="PT. Media Interaktif">PT. Media Interaktif</SelectItem>
-                        <SelectItem value="CV. Solusi Digital Indonesia">CV. Solusi Digital Indonesia</SelectItem>
+                        {dudiOptions.map((d) => (
+                          <SelectItem key={d.id} value={d.id.toString()}>{d.nama}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
 
-                  {/* Pembimbing */}
+                  {/* Pembimbing Dropdown */}
                   <div className="space-y-2">
-                    <Label htmlFor="pembimbing">
-                      Guru Pembimbing <span className="text-red-500">*</span>
-                    </Label>
-                    <Select value={form.pembimbing} onValueChange={(value) => setForm({ ...form, pembimbing: value })}>
+                    <Label htmlFor="pembimbing">Guru Pembimbing <span className="text-red-500">*</span></Label>
+                    <Select 
+                      value={form.guru_id} 
+                      onValueChange={(value) => setForm({ ...form, guru_id: value })}
+                    >
                       <SelectTrigger id="pembimbing">
                         <SelectValue placeholder="Pilih Guru Pembimbing" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="Suryanto, S.Pd">Suryanto, S.Pd</SelectItem>
-                        <SelectItem value="Kartika Sari, S.Kom">Kartika Sari, S.Kom</SelectItem>
-                        <SelectItem value="Agus Wahyudi, S.T">Agus Wahyudi, S.T</SelectItem>
-                        <SelectItem value="Rina Puspitasari, S.Pd">Rina Puspitasari, S.Pd</SelectItem>
-                        <SelectItem value="Bambang Priyanto, S.Kom">Bambang Priyanto, S.Kom</SelectItem>
+                        {guruOptions.map((g) => (
+                          <SelectItem key={g.id} value={g.id.toString()}>{g.nama}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -270,9 +356,7 @@ export default function ManajemenMagangPage() {
                   {/* Periode */}
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label htmlFor="tanggalMulai">
-                        Tanggal Mulai <span className="text-red-500">*</span>
-                      </Label>
+                      <Label htmlFor="tanggalMulai">Tanggal Mulai <span className="text-red-500">*</span></Label>
                       <Input
                         id="tanggalMulai"
                         type="date"
@@ -282,9 +366,7 @@ export default function ManajemenMagangPage() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="tanggalSelesai">
-                        Tanggal Selesai <span className="text-red-500">*</span>
-                      </Label>
+                      <Label htmlFor="tanggalSelesai">Tanggal Selesai <span className="text-red-500">*</span></Label>
                       <Input
                         id="tanggalSelesai"
                         type="date"
@@ -297,10 +379,11 @@ export default function ManajemenMagangPage() {
 
                   {/* Status */}
                   <div className="space-y-2">
-                    <Label htmlFor="status">
-                      Status <span className="text-red-500">*</span>
-                    </Label>
-                    <Select value={form.status} onValueChange={(value: 'aktif' | 'selesai' | 'dibatalkan') => setForm({ ...form, status: value })}>
+                    <Label htmlFor="status">Status <span className="text-red-500">*</span></Label>
+                    <Select 
+                      value={form.status} 
+                      onValueChange={(value) => setForm({ ...form, status: value })}
+                    >
                       <SelectTrigger id="status">
                         <SelectValue />
                       </SelectTrigger>
@@ -308,15 +391,15 @@ export default function ManajemenMagangPage() {
                         <SelectItem value="aktif">Aktif</SelectItem>
                         <SelectItem value="selesai">Selesai</SelectItem>
                         <SelectItem value="dibatalkan">Dibatalkan</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
 
                   <DialogFooter className="gap-2 sm:gap-0">
-                    <Button type="button" variant="outline" onClick={handleCancel}>
-                      Batal
-                    </Button>
-                    <Button type="submit" className="bg-[#0891b2] hover:bg-[#0e7490] text-white">
+                    <Button type="button" variant="outline" onClick={handleCancel}>Batal</Button>
+                    <Button type="submit" disabled={loading} className="bg-[#0891b2] hover:bg-[#0e7490] text-white">
+                      {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       {editingId ? 'Simpan Perubahan' : 'Tambah Magang'}
                     </Button>
                   </DialogFooter>
@@ -348,25 +431,10 @@ export default function ManajemenMagangPage() {
                 <SelectItem value="Dibatalkan">Dibatalkan</SelectItem>
               </SelectContent>
             </Select>
-
-            <div className="flex items-center gap-2">
-              <Select value={entriesPerPage} onValueChange={setEntriesPerPage}>
-                <SelectTrigger className="w-20">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="10">10</SelectItem>
-                  <SelectItem value="25">25</SelectItem>
-                  <SelectItem value="50">50</SelectItem>
-                </SelectContent>
-              </Select>
-              <span className="text-sm text-gray-600 whitespace-nowrap">data</span>
-            </div>
           </div>
         </div>
 
         <CardContent className="p-0">
-          {/* Table */}
           <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead className="bg-gray-100 border-b border-gray-200">
@@ -380,70 +448,49 @@ export default function ManajemenMagangPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {filteredMagang.map((magang) => (
-                  <tr key={magang.id} className="hover:bg-purple-50 transition-colors">
-                    <td className="px-4 py-4 text-sm font-medium text-gray-800">{magang.siswa}</td>
-                    <td className="px-4 py-4 text-sm text-gray-600">{magang.dudi}</td>
-                    <td className="px-4 py-4 text-sm text-gray-600">{magang.pembimbing}</td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-1 text-xs text-gray-600">
-                        <Calendar className="w-3 h-3 text-[#ad46ff]" />
-                        <span>{formatDate(magang.tanggalMulai)} - {formatDate(magang.tanggalSelesai)}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <Badge className={`${getStatusColor(magang.status)} border-0`}>
-                        {magang.status}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-2">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handleEdit(magang)}
-                          className="hover:bg-blue-50"
-                        >
-                          <Edit className="w-4 h-4 text-blue-600" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handleDelete(magang.id)}
-                          className="hover:bg-red-50"
-                        >
-                          <Trash2 className="w-4 h-4 text-red-600" />
-                        </Button>
-                      </div>
+                {loading ? (
+                  <tr>
+                    <td colSpan={6} className="text-center py-8 text-gray-500">
+                      <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
+                      Memuat data...
                     </td>
                   </tr>
-                ))}
+                ) : filteredMagang.length === 0 ? (
+                   <tr>
+                    <td colSpan={6} className="text-center py-8 text-gray-500">Tidak ada data ditemukan.</td>
+                   </tr>
+                ) : (
+                  filteredMagang.map((magang) => (
+                    <tr key={magang.id} className="hover:bg-purple-50 transition-colors">
+                      <td className="px-4 py-4 text-sm font-medium text-gray-800">{magang.siswa_nama}</td>
+                      <td className="px-4 py-4 text-sm text-gray-600">{magang.dudi_nama}</td>
+                      <td className="px-4 py-4 text-sm text-gray-600">{magang.guru_nama}</td>
+                      <td className="px-4 py-4">
+                        <div className="flex items-center gap-1 text-xs text-gray-600">
+                          <Calendar className="w-3 h-3 text-[#ad46ff]" />
+                          <span>{formatDate(magang.tanggalMulai)} - {formatDate(magang.tanggalSelesai)}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <Badge className={`${getStatusColor(magang.status)} border-0`}>
+                          {magang.status}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex items-center gap-2">
+                          <Button size="icon" variant="ghost" onClick={() => handleEdit(magang)} className="hover:bg-blue-50">
+                            <Edit className="w-4 h-4 text-blue-600" />
+                          </Button>
+                          <Button size="icon" variant="ghost" onClick={() => handleDelete(magang.id)} className="hover:bg-red-50">
+                            <Trash2 className="w-4 h-4 text-red-600" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
-          </div>
-
-          {/* Pagination */}
-          <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
-            <p className="text-sm text-gray-600">
-              Halaman 1 dari 1
-            </p>
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" disabled>
-                ‹‹
-              </Button>
-              <Button size="sm" variant="outline" disabled>
-                ‹
-              </Button>
-              <Button size="sm" className="bg-[#ad46ff] hover:bg-[#9b36f0] text-white">
-                1
-              </Button>
-              <Button size="sm" variant="outline" disabled>
-                ›
-              </Button>
-              <Button size="sm" variant="outline" disabled>
-                ››
-              </Button>
-            </div>
           </div>
         </CardContent>
       </Card>

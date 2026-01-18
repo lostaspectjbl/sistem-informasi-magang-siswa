@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
-import { Clock, FileText, Plus, Edit, Trash2, Filter, Search, User, Calendar } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Clock, FileText, Plus, Edit, Trash2, Filter, Search, User, Calendar, Loader2, AlertCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   Select,
   SelectContent,
@@ -21,49 +22,85 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
+import { supabase } from '@/lib/supabase';
 
 interface ActivityLog {
   id: number;
-  action: 'created' | 'updated' | 'deleted';
-  entity: string;
-  description: string;
-  user: string;
-  admin: string;
-  timestamp: string;
+  user_id: number | null;
+  action: string | null;
+  entity: string | null;
+  description: string | null;
+  created_at: string;
+  users?: {
+    nama: string;
+    role: string;
+  };
 }
 
 export default function ActivityLogsPage() {
-  const [logs, setLogs] = useState<ActivityLog[]>([
-    {
-      id: 1,
-      action: 'created',
-      entity: 'siswa',
-      description: 'Siswa baru "lukman santoso" (12345678987654) ditambahkan',
-      user: 'user',
-      admin: 'Unknown Admin',
-      timestamp: '2026-01-05T13:10:00',
-    },
-    {
-      id: 2,
-      action: 'deleted',
-      entity: 'siswa',
-      description: 'Siswa "lukman santoso" dihapus dari sistem',
-      user: 'user',
-      admin: 'Unknown Admin',
-      timestamp: '2026-01-05T13:10:00',
-    },
-  ]);
-
+  const [logs, setLogs] = useState<ActivityLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterAction, setFilterAction] = useState('All Actions');
   const [filterEntity, setFilterEntity] = useState('All Entities');
   const [showClearDialog, setShowClearDialog] = useState(false);
 
+  // Fetch activity logs dari Supabase
+  useEffect(() => {
+    fetchActivityLogs();
+  }, []);
+
+  const fetchActivityLogs = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const { data, error } = await (supabase as any)
+        .from('activity_log')
+        .select(`
+          *,
+          users (
+            nama,
+            role
+          )
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      setLogs(data || []);
+    } catch (error: any) {
+      setError(error.message || 'Gagal memuat activity logs');
+      console.error('Error fetching activity logs:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClearLogs = async () => {
+    try {
+      const { error } = await (supabase as any)
+        .from('activity_log')
+        .delete()
+        .neq('id', 0); // Delete all records
+
+      if (error) throw error;
+
+      alert('Semua log berhasil dihapus!');
+      setLogs([]);
+      setShowClearDialog(false);
+    } catch (error: any) {
+      alert('Error: ' + (error.message || 'Gagal menghapus logs'));
+      console.error('Error clearing logs:', error);
+    }
+  };
+
   // Calculate stats
   const totalLogs = logs.length;
-  const createdLogs = logs.filter(log => log.action === 'created').length;
-  const updatedLogs = logs.filter(log => log.action === 'updated').length;
-  const deletedLogs = logs.filter(log => log.action === 'deleted').length;
+  const createdLogs = logs.filter(log => log.action?.toLowerCase().includes('create')).length;
+  const updatedLogs = logs.filter(log => log.action?.toLowerCase().includes('update')).length;
+  const deletedLogs = logs.filter(log => log.action?.toLowerCase().includes('delete')).length;
 
   const stats = [
     { title: 'Total Logs', value: totalLogs, color: 'text-gray-800' },
@@ -74,61 +111,59 @@ export default function ActivityLogsPage() {
 
   // Filter logs
   const filteredLogs = logs.filter((log) => {
-    const matchSearch = log.description.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchSearch = log.description?.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchAction = filterAction === 'All Actions' || 
-      (filterAction === 'Created' && log.action === 'created') ||
-      (filterAction === 'Updated' && log.action === 'updated') ||
-      (filterAction === 'Deleted' && log.action === 'deleted');
+      (filterAction === 'Created' && log.action?.toLowerCase().includes('create')) ||
+      (filterAction === 'Updated' && log.action?.toLowerCase().includes('update')) ||
+      (filterAction === 'Deleted' && log.action?.toLowerCase().includes('delete'));
 
     const matchEntity = filterEntity === 'All Entities' || 
-      log.entity.toLowerCase() === filterEntity.toLowerCase();
+      log.entity?.toLowerCase() === filterEntity.toLowerCase();
 
     return matchSearch && matchAction && matchEntity;
   });
 
-  const handleClearLogs = () => {
-    setLogs([]);
-    setShowClearDialog(false);
+  const getActionIcon = (action: string | null) => {
+    if (!action) return <FileText className="w-5 h-5 text-gray-600" />;
+    
+    const actionLower = action.toLowerCase();
+    if (actionLower.includes('create')) {
+      return <Plus className="w-5 h-5 text-green-600" />;
+    } else if (actionLower.includes('update')) {
+      return <Edit className="w-5 h-5 text-blue-600" />;
+    } else if (actionLower.includes('delete')) {
+      return <Trash2 className="w-5 h-5 text-red-600" />;
+    }
+    return <FileText className="w-5 h-5 text-gray-600" />;
   };
 
-  const getActionIcon = (action: string) => {
-    switch (action) {
-      case 'created':
-        return <Plus className="w-5 h-5 text-green-600" />;
-      case 'updated':
-        return <Edit className="w-5 h-5 text-blue-600" />;
-      case 'deleted':
-        return <Trash2 className="w-5 h-5 text-red-600" />;
-      default:
-        return <FileText className="w-5 h-5 text-gray-600" />;
+  const getActionColor = (action: string | null) => {
+    if (!action) return 'bg-gray-50 border-gray-200';
+    
+    const actionLower = action.toLowerCase();
+    if (actionLower.includes('create')) {
+      return 'bg-green-50 border-green-200';
+    } else if (actionLower.includes('update')) {
+      return 'bg-blue-50 border-blue-200';
+    } else if (actionLower.includes('delete')) {
+      return 'bg-red-50 border-red-200';
     }
+    return 'bg-gray-50 border-gray-200';
   };
 
-  const getActionColor = (action: string) => {
-    switch (action) {
-      case 'created':
-        return 'bg-green-50 border-green-200';
-      case 'updated':
-        return 'bg-blue-50 border-blue-200';
-      case 'deleted':
-        return 'bg-red-50 border-red-200';
-      default:
-        return 'bg-gray-50 border-gray-200';
+  const getActionBadgeColor = (action: string | null) => {
+    if (!action) return 'bg-gray-100 text-gray-700';
+    
+    const actionLower = action.toLowerCase();
+    if (actionLower.includes('create')) {
+      return 'bg-green-100 text-green-700';
+    } else if (actionLower.includes('update')) {
+      return 'bg-blue-100 text-blue-700';
+    } else if (actionLower.includes('delete')) {
+      return 'bg-red-100 text-red-700';
     }
-  };
-
-  const getActionBadgeColor = (action: string) => {
-    switch (action) {
-      case 'created':
-        return 'bg-green-100 text-green-700';
-      case 'updated':
-        return 'bg-blue-100 text-blue-700';
-      case 'deleted':
-        return 'bg-red-100 text-red-700';
-      default:
-        return 'bg-gray-100 text-gray-700';
-    }
+    return 'bg-gray-100 text-gray-700';
   };
 
   const formatTimestamp = (timestamp: string) => {
@@ -141,6 +176,14 @@ export default function ActivityLogsPage() {
       minute: '2-digit'
     });
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <Loader2 className="w-8 h-8 animate-spin text-purple-500" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -155,6 +198,7 @@ export default function ActivityLogsPage() {
           <Button
             onClick={() => setShowClearDialog(true)}
             className="bg-red-600 hover:bg-red-700 text-white"
+            disabled={logs.length === 0}
           >
             <Trash2 className="w-4 h-4 mr-2" />
             Clear Logs
@@ -181,6 +225,13 @@ export default function ActivityLogsPage() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -238,7 +289,7 @@ export default function ActivityLogsPage() {
                 <SelectItem value="guru">Guru</SelectItem>
                 <SelectItem value="dudi">DUDI</SelectItem>
                 <SelectItem value="magang">Magang</SelectItem>
-                <SelectItem value="jurnal">Jurnal</SelectItem>
+                <SelectItem value="logbook">Logbook</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -282,25 +333,34 @@ export default function ActivityLogsPage() {
                   {/* Content */}
                   <div className="flex-1 min-w-0">
                     <p className="text-gray-800 font-medium mb-2">
-                      {log.description}
+                      {log.description || 'No description'}
                     </p>
                     
                     <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600">
-                      {/* User Badge */}
-                      <Badge className="bg-purple-100 text-purple-700 border-0">
-                        {log.user}
-                      </Badge>
+                      {/* Entity Badge */}
+                      {log.entity && (
+                        <Badge className="bg-purple-100 text-purple-700 border-0 capitalize">
+                          {log.entity}
+                        </Badge>
+                      )}
 
-                      {/* Admin */}
+                      {/* User */}
                       <div className="flex items-center gap-1">
                         <User className="w-3 h-3" />
-                        <span>{log.admin}</span>
+                        <span>{log.users?.nama || 'Unknown User'}</span>
                       </div>
+
+                      {/* Role */}
+                      {log.users?.role && (
+                        <Badge className="bg-blue-100 text-blue-700 border-0 capitalize text-xs">
+                          {log.users.role}
+                        </Badge>
+                      )}
 
                       {/* Timestamp */}
                       <div className="flex items-center gap-1">
                         <Calendar className="w-3 h-3" />
-                        <span>{formatTimestamp(log.timestamp)}</span>
+                        <span>{formatTimestamp(log.created_at)}</span>
                       </div>
                     </div>
                   </div>
@@ -308,7 +368,7 @@ export default function ActivityLogsPage() {
                   {/* Action Badge */}
                   <div className="flex-shrink-0">
                     <Badge className={`${getActionBadgeColor(log.action)} border-0 capitalize`}>
-                      {log.action}
+                      {log.action || 'Unknown'}
                     </Badge>
                   </div>
                 </div>

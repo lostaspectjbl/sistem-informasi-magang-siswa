@@ -1,283 +1,265 @@
 // File: src/app/siswa/dashboard/page.tsx
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { FileText, CheckCircle, Clock, XCircle, Building2, User, Calendar, BookOpen } from 'lucide-react';
+import { 
+  FileText, CheckCircle, Clock, XCircle, 
+  Loader2, AlertCircle, Building2, User, Calendar, BookOpen
+} from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { supabase } from '@/lib/supabase';
+import { Database } from '@/types';
+
+// Tipe dasar dari Supabase
+type SiswaTable = Database['public']['Tables']['siswa']['Row'];
+type MagangTable = Database['public']['Tables']['magang']['Row'];
+type LogbookTable = Database['public']['Tables']['logbook']['Row'];
+
+// Interface untuk hasil join (relasi)
+interface SiswaJoined extends SiswaTable {
+  guru: { nama: string; telepon: string | null } | null;
+  dudi: { nama_perusahaan: string; alamat: string | null; penanggung_jawab: string | null } | null;
+}
 
 export default function SiswaDashboardPage() {
   const router = useRouter();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [siswa, setSiswa] = useState<SiswaJoined | null>(null);
+  const [magang, setMagang] = useState<MagangTable | null>(null);
+  const [recentLogs, setRecentLogs] = useState<LogbookTable[]>([]);
+  const [stats, setStats] = useState({
+    total: 0,
+    disetujui: 0,
+    pending: 0,
+    ditolak: 0
+  });
 
-  // Data siswa - nanti bisa diganti dengan data real dari session/API
-  const studentName = "Jabal Ario Dewantoro";
-  const studentNIS = "2021001";
-  const studentClass = "XI";
-  const studentMajor = "RPL";
+  const currentSiswaEmail = "siti.siswa@sekolah.id";
 
-  // Data magang
-  const internshipData = {
-    company: "PT. Teknologi Nusantara",
-    address: "Jl. HR Muhammad No. 123, Surabaya",
-    supervisor: "Suryanto, S.Pd",
-    supervisorRole: "Pemograman Web & Mobile",
-    period: "1 Juli 2024 - 30 September 2024",
-    status: "Aktif",
-    notes: "Siswa menunjukkan performa baik"
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      // 1. Fetch siswa + relasi
+      const { data: rawSiswa, error: siswaError } = await supabase
+        .from('siswa')
+        .select(`
+          *,
+          guru:guru_id (nama, telepon),
+          dudi:dudi_id (nama_perusahaan, alamat, penanggung_jawab)
+        `)
+        .eq('email', currentSiswaEmail)
+        .single();
+
+      if (siswaError) throw siswaError;
+      if (!rawSiswa) throw new Error('Data siswa tidak ditemukan');
+
+      // Casting ke unknown dulu baru ke SiswaJoined untuk menghindari 'never'
+      const siswaData = (rawSiswa as unknown) as SiswaJoined;
+      setSiswa(siswaData);
+
+      // Ambil ID ke variabel lokal dengan tipe pasti
+      const targetSiswaId: number = siswaData.id;
+
+      // 2. Fetch magang terbaru
+      const { data: rawMagang, error: magangError } = await supabase
+        .from('magang')
+        .select('*')
+        .eq('siswa_id', targetSiswaId) // Baris 68 - Sekarang AMAN
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (magangError) throw magangError;
+
+      if (!rawMagang) {
+        setMagang(null);
+        setRecentLogs([]);
+        setStats({ total: 0, disetujui: 0, pending: 0, ditolak: 0 });
+      } else {
+        // Casting ke unknown dulu baru ke MagangTable
+        const magangData = (rawMagang as unknown) as MagangTable;
+        setMagang(magangData);
+
+        const targetMagangId: number = magangData.id;
+
+        // 3. Fetch logbook
+        const { data: rawLogs, error: logsError } = await supabase
+          .from('logbook')
+          .select('*')
+          .eq('magang_id', targetMagangId) // Baris 96 - Sekarang AMAN
+          .order('tanggal', { ascending: false });
+
+        if (logsError) throw logsError;
+
+        const logs = (rawLogs as unknown as LogbookTable[]) || [];
+
+        setStats({
+          total: logs.length,
+          disetujui: logs.filter(l => l.status_verifikasi === 'disetujui').length,
+          pending: logs.filter(l => l.status_verifikasi === 'pending').length,
+          ditolak: logs.filter(l => l.status_verifikasi === 'ditolak').length,
+        });
+
+        setRecentLogs(logs.slice(0, 3));
+      }
+
+    } catch (err: any) {
+      console.error('[Dashboard Error]', err);
+      setError(err.message || 'Gagal memuat data dashboard');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Stats data
-  const stats = [
-    { 
-      label: "Total Jurnal", 
-      value: "2", 
-      sublabel: "Jurnal yang dibuat", 
-      icon: FileText,
-      color: "text-blue-600",
-      bgColor: "bg-blue-50"
-    },
-    { 
-      label: "Disetujui", 
-      value: "1", 
-      sublabel: "Jurnal disetujui", 
-      icon: CheckCircle,
-      color: "text-green-600",
-      bgColor: "bg-green-50"
-    },
-    { 
-      label: "Pending", 
-      value: "1", 
-      sublabel: "Menunggu verifikasi", 
-      icon: Clock,
-      color: "text-yellow-600",
-      bgColor: "bg-yellow-50"
-    },
-    { 
-      label: "Ditolak", 
-      value: "0", 
-      sublabel: "Jurnal ditolak", 
-      icon: XCircle,
-      color: "text-red-600",
-      bgColor: "bg-red-50"
-    },
-  ];
-
-  // Aktivitas jurnal terbaru
-  const journalActivities = [
-    {
-      date: "16 Juli 2024",
-      status: "Menunggu",
-      statusColor: "bg-yellow-100 text-yellow-700",
-      description: "Belajar backend Laravel untuk membangun REST API sistem kasir. Mempelajari konsep MVC dan routing.",
-    },
-    {
-      date: "15 Juli 2024",
-      status: "Disetujui",
-      statusColor: "bg-green-100 text-green-700",
-      description: "Membuat desain UI aplikasi kasir menggunakan Figma. Melakukan analisis user experience dan wireframing untuk interface yang user-friendly.",
-      notes: "Bagus, lanjutkan dengan implementasi",
-    },
-  ];
-
-  // Fungsi untuk navigasi
-  const handleBuatJurnal = () => {
-    // Nanti ganti dengan path yang sesuai
-    router.push('/siswa/jurnal');
+  const getStatusBadge = (status: string | null) => {
+    if (!status) return "bg-gray-100 text-gray-700";
+    const colors: Record<string, string> = {
+      disetujui: "bg-green-100 text-green-700 border-none",
+      pending: "bg-yellow-100 text-yellow-700 border-none",
+      ditolak: "bg-red-100 text-red-700 border-none",
+    };
+    return colors[status] || "bg-gray-100 text-gray-700";
   };
 
-  const handleLihatJurnal = () => {
-    // Nanti ganti dengan path yang sesuai
-    router.push('/siswa/jurnal');
-  };
-
-  const handleInfoMagang = () => {
-    // Nanti ganti dengan path yang sesuai
-    router.push('/siswa/magang');
-  };
+  if (loading) return (
+    <div className="flex items-center justify-center h-screen">
+      <Loader2 className="animate-spin text-purple-600 h-10 w-10" />
+    </div>
+  );
 
   return (
-    <div className="space-y-6 p-6">
-      {/* Header dengan gradient */}
-      <div className="bg-gradient-to-r from-purple-500 to-purple-600 rounded-lg p-6 text-white shadow-lg">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
-              Selamat Datang, {studentName}! 👋
-            </h1>
-            <p className="text-cyan-50 text-lg">
-              {studentNIS} • {studentClass} • {studentMajor}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Calendar className="w-5 h-5" />
-            <span>13 Januari 2026</span>
-          </div>
-        </div>
+    <div className="space-y-6 p-6 max-w-7xl mx-auto">
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Header */}
+      <div className="bg-gradient-to-r from-purple-600 to-indigo-600 rounded-2xl p-6 text-white shadow-lg">
+        <h1 className="text-2xl font-bold">Halo, {siswa?.nama || 'Siswa'}! 👋</h1>
+        <p className="opacity-80">
+          {siswa?.nis || '-'} • {siswa?.kelas || '-'} • {siswa?.jurusan || '-'}
+        </p>
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {stats.map((stat, idx) => (
-          <Card key={idx} className="hover:shadow-md transition-shadow">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <div className={`p-3 rounded-lg ${stat.bgColor}`}>
-                  <stat.icon className={`w-6 h-6 ${stat.color}`} />
-                </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {[
+          { label: "Total", val: stats.total, icon: FileText, bg: "bg-blue-50", text: "text-blue-600" },
+          { label: "Setuju", val: stats.disetujui, icon: CheckCircle, bg: "bg-green-50", text: "text-green-600" },
+          { label: "Pending", val: stats.pending, icon: Clock, bg: "bg-yellow-50", text: "text-yellow-600" },
+          { label: "Tolak", val: stats.ditolak, icon: XCircle, bg: "bg-red-50", text: "text-red-600" },
+        ].map((item, idx) => (
+          <Card key={idx} className="border-none shadow-sm">
+            <CardContent className="p-4 flex items-center gap-4">
+              <div className={`p-2 rounded-lg ${item.bg} ${item.text}`}>
+                <item.icon size={20} />
               </div>
               <div>
-                <p className="text-sm text-gray-600 mb-1">{stat.label}</p>
-                <p className="text-3xl font-bold text-gray-800 mb-1">{stat.value}</p>
-                <p className="text-xs text-gray-500">{stat.sublabel}</p>
+                <p className="text-xs text-gray-500 font-bold uppercase">{item.label}</p>
+                <p className="text-2xl font-black">{item.val}</p>
               </div>
             </CardContent>
           </Card>
         ))}
       </div>
 
-      {/* Main Content Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Informasi Magang - 2 columns */}
-        <Card className="lg:col-span-2">
-          <CardHeader className="border-b bg-gray-50">
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <Building2 className="w-5 h-5 text-purple-600" />
-              Informasi Magang
+        {/* Info Magang */}
+        <Card className="lg:col-span-2 border-none shadow-sm">
+          <CardHeader className="bg-slate-50/50 border-b">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Building2 className="w-4 h-4" /> Info Magang
             </CardTitle>
           </CardHeader>
           <CardContent className="p-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Tempat Magang */}
-              <div>
-                <div className="flex items-start gap-3 mb-4">
-                  <div className="p-2 bg-purple-50 rounded-lg">
-                    <Building2 className="w-5 h-5 text-purple-600" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500 mb-1">Tempat Magang</p>
-                    <p className="font-semibold text-gray-800">{internshipData.company}</p>
-                    <p className="text-sm text-gray-600 mt-1">{internshipData.address}</p>
-                  </div>
+            {!magang ? (
+              <p className="text-gray-400 italic">Belum terdaftar magang aktif.</p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase">Perusahaan</p>
+                  <p className="font-bold text-gray-800">{siswa?.dudi?.nama_perusahaan || '-'}</p>
+                  <p className="text-sm text-gray-600">{siswa?.dudi?.alamat || '-'}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase">Pembimbing Guru</p>
+                  <p className="font-bold text-gray-800">{siswa?.guru?.nama || '-'}</p>
+                  <p className="text-sm text-gray-600">{siswa?.guru?.telepon || '-'}</p>
                 </div>
               </div>
-
-              {/* Guru Pembimbing */}
-              <div>
-                <div className="flex items-start gap-3 mb-4">
-                  <div className="p-2 bg-purple-50 rounded-lg">
-                    <User className="w-5 h-5 text-purple-600" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500 mb-1">Guru Pembimbing</p>
-                    <p className="font-semibold text-gray-800">{internshipData.supervisor}</p>
-                    <p className="text-sm text-gray-600 mt-1">{internshipData.supervisorRole}</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Periode Magang */}
-            <div className="mt-4 p-4 bg-gray-50 rounded-lg flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Calendar className="w-5 h-5 text-gray-600" />
-                <div>
-                  <p className="text-sm text-gray-500">Periode Magang</p>
-                  <p className="font-semibold text-gray-800">{internshipData.period}</p>
-                </div>
-              </div>
-              <Badge className="bg-green-100 text-green-700 hover:bg-green-100">
-                {internshipData.status}
-              </Badge>
-            </div>
-
-            {/* Catatan */}
-            <div className="mt-4 p-4 bg-blue-50 border border-blue-100 rounded-lg">
-              <p className="text-sm font-medium text-gray-700 mb-1">Catatan:</p>
-              <p className="text-sm text-blue-800">{internshipData.notes}</p>
-            </div>
+            )}
           </CardContent>
         </Card>
 
-        {/* Aksi Cepat - 1 column */}
-        <Card>
-          <CardHeader className="border-b bg-gray-50">
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <BookOpen className="w-5 h-5 text-purple-600" />
-              Aksi Cepat
+        {/* Aksi Cepat */}
+        <Card className="border-none shadow-sm">
+          <CardHeader className="bg-slate-50/50 border-b">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <BookOpen className="w-4 h-4" /> Aksi Cepat
             </CardTitle>
           </CardHeader>
           <CardContent className="p-6 space-y-3">
             <Button 
-              className="w-full bg-purple-500 hover:bg-purple-600 text-white justify-start"
-              onClick={handleBuatJurnal}
+              className="w-full bg-purple-600 hover:bg-purple-700 font-bold h-11" 
+              onClick={() => router.push('/siswa/jurnal')}
             >
-              <FileText className="w-4 h-4 mr-2" />
-              Buat Jurnal Baru
+              Tambah Jurnal
             </Button>
             <Button 
               variant="outline" 
-              className="w-full justify-start border-purple-200 text-purple-700 hover:bg-purple-50"
-              onClick={handleLihatJurnal}
+              className="w-full h-11 border-slate-200" 
+              onClick={() => router.push('/siswa/jurnal')}
             >
-              <BookOpen className="w-4 h-4 mr-2" />
-              Lihat Semua Jurnal
-            </Button>
-            <Button 
-              variant="outline" 
-              className="w-full justify-start"
-              onClick={handleInfoMagang}
-            >
-              <Building2 className="w-4 h-4 mr-2" />
-              Info Magang
+              Lihat Riwayat
             </Button>
           </CardContent>
         </Card>
       </div>
 
-      {/* Aktivitas Jurnal Terbaru */}
-      <Card>
-        <CardHeader className="border-b bg-gray-50">
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <BookOpen className="w-5 h-5 text-purple-600" />
-              Aktivitas Jurnal Terbaru
-            </CardTitle>
-            <Button 
-              variant="link" 
-              className="text-purple-600"
-              onClick={handleLihatJurnal}
-            >
-              Lihat Semua
-            </Button>
-          </div>
+      {/* Recent Jurnal */}
+      <Card className="border-none shadow-sm">
+        <CardHeader className="bg-slate-50/50 border-b flex flex-row items-center justify-between">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Clock className="w-4 h-4" /> Jurnal Terbaru
+          </CardTitle>
+          <Button variant="link" size="sm" className="text-purple-600 font-bold" onClick={() => router.push('/siswa/jurnal')}>
+            Lihat semua
+          </Button>
         </CardHeader>
         <CardContent className="p-6">
-          <div className="space-y-4">
-            {journalActivities.map((activity, idx) => (
-              <div key={idx} className="border rounded-lg p-4 hover:bg-gray-50 transition-colors">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex items-center gap-3">
-                    <Calendar className="w-4 h-4 text-gray-400" />
-                    <span className="text-sm font-medium text-gray-700">{activity.date}</span>
+          {recentLogs.length === 0 ? (
+            <p className="text-center text-gray-400 py-8 italic">Belum ada jurnal yang tercatat</p>
+          ) : (
+            <div className="space-y-4">
+              {recentLogs.map(log => (
+                <div key={log.id} className="p-4 border border-slate-100 rounded-xl hover:bg-slate-50 transition-colors">
+                  <div className="flex justify-between items-start mb-2">
+                    <span className="text-xs font-bold text-slate-500">
+                      {new Date(log.tanggal).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+                    </span>
+                    <Badge className={`${getStatusBadge(log.status_verifikasi)} capitalize font-bold`}>
+                      {log.status_verifikasi || 'pending'}
+                    </Badge>
                   </div>
-                  <Badge className={activity.statusColor}>
-                    {activity.status}
-                  </Badge>
+                  <p className="text-sm text-slate-700 leading-relaxed font-medium">{log.kegiatan}</p>
                 </div>
-                <p className="text-sm text-gray-700 leading-relaxed mb-2">
-                  {activity.description}
-                </p>
-                {activity.notes && (
-                  <div className="mt-3 p-3 bg-green-50 border border-green-100 rounded">
-                    <p className="text-xs font-medium text-gray-700 mb-1">Catatan Guru:</p>
-                    <p className="text-xs text-green-800">{activity.notes}</p>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

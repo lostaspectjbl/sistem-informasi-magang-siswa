@@ -36,7 +36,7 @@ export default function AppLayout({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50" suppressHydrationWarning>
       {/* Topbar */}
       <Topbar 
         userInfo={userInfo}
@@ -81,8 +81,9 @@ export default function AppLayout({
         className={`pt-16 transition-all duration-300 ${
           sidebarOpen ? 'lg:pl-64' : 'lg:pl-20'
         }`}
+        suppressHydrationWarning
       >
-        <div className="p-6">
+        <div className="p-6" suppressHydrationWarning>
           {children}
         </div>
       </main>

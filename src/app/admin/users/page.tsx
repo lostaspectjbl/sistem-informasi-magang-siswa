@@ -1,14 +1,15 @@
 // File: src/app/admin/users/page.tsx
 'use client';
 
-import React, { useState } from 'react';
-import { Users, Plus, Edit2, Trash2, CheckCircle, Mail, Search } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Users, Plus, Edit2, Trash2, CheckCircle, Mail, Search, Loader2, AlertCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   Dialog,
   DialogContent,
@@ -24,97 +25,190 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
+import { supabase } from '@/lib/supabase';
 
 interface User {
   id: number;
-  name: string;
+  nama: string;
   email: string;
   role: string;
-  verified: boolean;
-  date: string;
+  created_at: string;
 }
 
 export default function UsersPage() {
-  const [userList, setUserList] = useState<User[]>([
-    { id: 1, name: 'Admin Sistem', email: 'admin@email.com', role: 'Admin', verified: true, date: '1 Jan 2024' },
-    { id: 2, name: 'Pak Suryanto', email: 'suryanto@teacher.com', role: 'Guru', verified: true, date: '2 Jan 2024' },
-    { id: 3, name: 'Bu Kartika', email: 'kartika@teacher.com', role: 'Guru', verified: true, date: '3 Jan 2024' },
-    { id: 4, name: 'Ahmad Rizki', email: 'ahmad.rizki@gmail.com', role: 'Siswa', verified: true, date: '4 Jan 2024' },
-    { id: 5, name: 'Siti Nurhaliza', email: 'siti.nur@gmail.com', role: 'Siswa', verified: true, date: '5 Jan 2024' }
-  ]);
-  
+  const [userList, setUserList] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [showDialog, setShowDialog] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [form, setForm] = useState({ name: '', email: '', role: 'Siswa', password: '' });
+  const [form, setForm] = useState({ nama: '', email: '', role: 'siswa', password: '' });
   const [searchTerm, setSearchTerm] = useState('');
   const [filterRole, setFilterRole] = useState('Semua Role');
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Fetch users dari Supabase
+  useEffect(() => {
+    fetchUsers();
+  }, []);
+
+  const fetchUsers = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      const { data, error } = await (supabase as any)
+        .from('users')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      
+      setUserList(data || []);
+    } catch (error: any) {
+      setError(error.message || 'Gagal memuat data user');
+      console.error('Error fetching users:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (form.name && form.email) {
+    if (!form.nama || !form.email) {
+      alert('Nama dan email harus diisi');
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      setError(null);
+
       if (editingId) {
-        setUserList(userList.map(u => 
-          u.id === editingId ? { ...u, name: form.name, email: form.email, role: form.role } : u
-        ));
-        setEditingId(null);
-      } else {
-        const newUser = {
-          id: Math.max(...userList.map(u => u.id), 0) + 1,
-          name: form.name,
+        // Update user
+        const updateData: any = {
+          nama: form.nama,
           email: form.email,
           role: form.role,
-          verified: true,
-          date: new Date().toLocaleDateString('id-ID', {
-            day: 'numeric',
-            month: 'short',
-            year: 'numeric'
-          })
+          updated_at: new Date().toISOString(),
         };
-        setUserList([...userList, newUser]);
+
+        // Hanya update password jika diisi
+        if (form.password) {
+          updateData.password = form.password;
+        }
+
+        const { error } = await (supabase as any)
+          .from('users')
+          .update(updateData)
+          .eq('id', editingId);
+
+        if (error) throw error;
+
+        alert('Data user berhasil diperbarui!');
+      } else {
+        // Insert user baru
+        if (!form.password) {
+          alert('Password harus diisi untuk user baru');
+          return;
+        }
+
+        const { error } = await (supabase as any)
+          .from('users')
+          .insert([{
+            nama: form.nama,
+            email: form.email,
+            role: form.role,
+            password: form.password,
+          }]);
+
+        if (error) throw error;
+
+        alert('User baru berhasil ditambahkan!');
       }
-      
-      // Reset form
-      setForm({ name: '', email: '', role: 'Siswa', password: '' });
+
+      // Reset form dan refresh data
+      setForm({ nama: '', email: '', role: 'siswa', password: '' });
       setShowDialog(false);
+      setEditingId(null);
+      fetchUsers();
+    } catch (error: any) {
+      alert('Error: ' + (error.message || 'Gagal menyimpan data'));
+      console.error('Error saving user:', error);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleEdit = (user: User) => {
-    setForm({ name: user.name, email: user.email, role: user.role, password: '' });
+    setForm({ 
+      nama: user.nama, 
+      email: user.email, 
+      role: user.role, 
+      password: '' 
+    });
     setEditingId(user.id);
     setShowDialog(true);
   };
 
-  const handleDelete = (id: number) => {
-    if (confirm('Apakah Anda yakin ingin menghapus user ini?')) {
-      setUserList(userList.filter(u => u.id !== id));
+  const handleDelete = async (id: number) => {
+    if (!confirm('Apakah Anda yakin ingin menghapus user ini?')) return;
+
+    try {
+      const { error } = await (supabase as any)
+        .from('users')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
+      alert('User berhasil dihapus!');
+      fetchUsers();
+    } catch (error: any) {
+      alert('Error: ' + (error.message || 'Gagal menghapus user'));
+      console.error('Error deleting user:', error);
     }
   };
 
   const handleCancel = () => {
     setShowDialog(false);
     setEditingId(null);
-    setForm({ name: '', email: '', role: 'Siswa', password: '' });
+    setForm({ nama: '', email: '', role: 'siswa', password: '' });
   };
 
   const filteredUsers = userList.filter(user => {
     const matchSearch =
-      user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      user.nama.toLowerCase().includes(searchTerm.toLowerCase()) ||
       user.email.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchRole = filterRole === 'Semua Role' || user.role === filterRole;
+    const matchRole = filterRole === 'Semua Role' || user.role.toLowerCase() === filterRole.toLowerCase();
     return matchSearch && matchRole;
   });
 
-  // 🎨 WARNA BADGE ROLE
   const roleColor = (role: string) => {
-    switch (role) {
-      case 'Admin': return 'bg-purple-200 text-purple-800';
-      case 'Guru': return 'bg-blue-200 text-blue-800';
-      case 'Siswa': return 'bg-[#f3e3ff] text-[#ad46ff]';
+    switch (role.toLowerCase()) {
+      case 'admin': return 'bg-purple-200 text-purple-800';
+      case 'guru': return 'bg-blue-200 text-blue-800';
+      case 'siswa': return 'bg-[#f3e3ff] text-[#ad46ff]';
+      case 'dudi': return 'bg-green-200 text-green-800';
       default: return 'bg-gray-100 text-gray-700';
     }
   };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('id-ID', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    });
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <Loader2 className="w-8 h-8 animate-spin text-[#ad46ff]" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -122,6 +216,13 @@ export default function UsersPage() {
         <h1 className="text-3xl font-bold text-gray-800 mb-2">Manajemen User</h1>
         <p className="text-gray-600">Kelola akun pengguna sistem</p>
       </div>
+
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
 
       <Card>
         <CardHeader>
@@ -140,12 +241,11 @@ export default function UsersPage() {
             </Button>
           </div>
 
-          {/* Search & Filter */}
           <div className="flex gap-4">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
               <Input
-                placeholder="Cari nama, email, atau role..."
+                placeholder="Cari nama atau email..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="pl-10"
@@ -158,9 +258,10 @@ export default function UsersPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="Semua Role">Semua Role</SelectItem>
-                <SelectItem value="Admin">Admin</SelectItem>
-                <SelectItem value="Guru">Guru</SelectItem>
-                <SelectItem value="Siswa">Siswa</SelectItem>
+                <SelectItem value="admin">Admin</SelectItem>
+                <SelectItem value="guru">Guru</SelectItem>
+                <SelectItem value="siswa">Siswa</SelectItem>
+                <SelectItem value="dudi">DUDI</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -186,11 +287,11 @@ export default function UsersPage() {
                       <div className="flex items-center">
                         <Avatar className="mr-3">
                           <AvatarFallback className="bg-[#ad46ff] text-white">
-                            {user.name[0]}
+                            {user.nama[0]?.toUpperCase()}
                           </AvatarFallback>
                         </Avatar>
                         <div>
-                          <p className="font-medium text-gray-800">{user.name}</p>
+                          <p className="font-medium text-gray-800">{user.nama}</p>
                           <p className="text-sm text-gray-500">ID: {user.id}</p>
                         </div>
                       </div>
@@ -201,22 +302,20 @@ export default function UsersPage() {
                         <Mail className="w-4 h-4 mr-2 text-[#ad46ff]" />
                         {user.email}
                       </div>
-                      {user.verified && (
-                        <div className="flex items-center text-xs text-green-600 mt-1">
-                          <CheckCircle className="w-3 h-3 mr-1" />
-                          Verified
-                        </div>
-                      )}
+                      <div className="flex items-center text-xs text-green-600 mt-1">
+                        <CheckCircle className="w-3 h-3 mr-1" />
+                        Verified
+                      </div>
                     </td>
 
                     <td className="px-4 py-4">
                       <Badge className={roleColor(user.role)}>
-                        {user.role}
+                        {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
                       </Badge>
                     </td>
 
                     <td className="px-4 py-4 text-sm text-gray-600">
-                      {user.date}
+                      {formatDate(user.created_at)}
                     </td>
 
                     <td className="px-4 py-4">
@@ -257,21 +356,13 @@ export default function UsersPage() {
           {filteredUsers.length > 0 && (
             <div className="flex justify-between items-center mt-4 pt-4 border-t">
               <div className="text-sm text-gray-600">
-                Menampilkan 1 sampai {Math.min(5, filteredUsers.length)} dari {filteredUsers.length} entri
-              </div>
-
-              <div className="flex space-x-2">
-                <Button size="sm" variant="outline">1</Button>
-                <Button size="sm" variant="ghost">2</Button>
-                <Button size="sm" variant="ghost">3</Button>
-                <Button size="sm" variant="ghost">»</Button>
+                Menampilkan {filteredUsers.length} dari {userList.length} user
               </div>
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Dialog Modal */}
       <Dialog open={showDialog} onOpenChange={setShowDialog}>
         <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -284,21 +375,19 @@ export default function UsersPage() {
           </DialogHeader>
           
           <form onSubmit={handleSubmit} className="space-y-4 py-4">
-            {/* Nama Lengkap */}
             <div className="space-y-2">
-              <Label htmlFor="name">
+              <Label htmlFor="nama">
                 Nama Lengkap <span className="text-red-500">*</span>
               </Label>
               <Input
-                id="name"
-                value={form.name}
-                onChange={(e) => setForm({...form, name: e.target.value})}
+                id="nama"
+                value={form.nama}
+                onChange={(e) => setForm({...form, nama: e.target.value})}
                 placeholder="Masukkan nama lengkap"
                 required
               />
             </div>
 
-            {/* Email */}
             <div className="space-y-2">
               <Label htmlFor="email">
                 Email <span className="text-red-500">*</span>
@@ -313,7 +402,6 @@ export default function UsersPage() {
               />
             </div>
 
-            {/* Password */}
             <div className="space-y-2">
               <Label htmlFor="password">
                 Password {!editingId && <span className="text-red-500">*</span>}
@@ -333,7 +421,6 @@ export default function UsersPage() {
               )}
             </div>
 
-            {/* Role */}
             <div className="space-y-2">
               <Label htmlFor="role">
                 Role <span className="text-red-500">*</span>
@@ -343,9 +430,10 @@ export default function UsersPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Siswa">Siswa</SelectItem>
-                  <SelectItem value="Guru">Guru</SelectItem>
-                  <SelectItem value="Admin">Admin</SelectItem>
+                  <SelectItem value="siswa">Siswa</SelectItem>
+                  <SelectItem value="guru">Guru</SelectItem>
+                  <SelectItem value="admin">Admin</SelectItem>
+                  <SelectItem value="dudi">DUDI</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -355,14 +443,23 @@ export default function UsersPage() {
                 type="button" 
                 variant="outline" 
                 onClick={handleCancel}
+                disabled={submitting}
               >
                 Batal
               </Button>
               <Button 
                 type="submit" 
                 className="bg-[#ad46ff] hover:bg-[#933bdc]"
+                disabled={submitting}
               >
-                {editingId ? 'Update' : 'Simpan'}
+                {submitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Menyimpan...
+                  </>
+                ) : (
+                  editingId ? 'Update' : 'Simpan'
+                )}
               </Button>
             </DialogFooter>
           </form>
@@ -370,4 +467,4 @@ export default function UsersPage() {
       </Dialog>
     </div>
   );
-} 
+}

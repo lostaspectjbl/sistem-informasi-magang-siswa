@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { FileText, Clock, CheckCircle, XCircle, Eye, Check, X, Filter } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { FileText, Clock, CheckCircle, XCircle, Eye, Check, X, Filter, Loader2, AlertCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   Dialog,
   DialogContent,
@@ -24,87 +25,128 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { supabase } from '@/lib/supabase';
+import { Database } from '@/types';
 
-interface Jurnal {
-  id: number;
-  siswa: string;
-  nis: string;
-  tanggal: string;
-  kegiatan: string;
-  kendala: string;
-  status: 'Belum Diverifikasi' | 'Disetujui' | 'Ditolak';
-  catatan: string;
+type LogbookRow = Database['public']['Tables']['logbook']['Row'];
+type LogbookUpdate = Database['public']['Tables']['logbook']['Update'];
+
+interface LogbookWithSiswa extends LogbookRow {
+  siswa: {
+    nama: string;
+    nis: string;
+  };
 }
 
 export default function ApprovalJurnalPage() {
-  const [jurnalList, setJurnalList] = useState<Jurnal[]>([
-    {
-      id: 1,
-      siswa: 'Siti Nurhaliza',
-      nis: '2024001',
-      tanggal: '2024-07-19',
-      kegiatan: 'Implementasi form validation dan data management menggunakan React Hook Form',
-      kendala: 'Belum memahami konsep controlled vs uncontrolled components',
-      status: 'Belum Diverifikasi',
-      catatan: '',
-    },
-    {
-      id: 2,
-      siswa: 'Ahmad Rizki Ramadhan',
-      nis: '2024001',
-      tanggal: '2024-07-18',
-      kegiatan: 'Belajar backend Laravel untuk membangun REST API sistem kasir. Mempelajari konsep MVC dan routing.',
-      kendala: 'Error saat menjalankan migration database dan kesulitan memahami relationship antar tabel',
-      status: 'Belum Diverifikasi',
-      catatan: '',
-    },
-    {
-      id: 3,
-      siswa: 'Ahmad Rizki Ramadhan',
-      nis: '2024001',
-      tanggal: '2024-07-17',
-      kegiatan: 'Membuat desain UI aplikasi kasir menggunakan Figma. Melakukan analisis user experience dan wireframing untuk...',
-      kendala: 'Kesulitan menentukan skema warna yang tepat dan konsisten untuk seluruh aplikasi',
-      status: 'Disetujui',
-      catatan: 'Bagus, lanjutkan dengan implementasi',
-    },
-    {
-      id: 4,
-      siswa: 'Siti Nurhaliza',
-      nis: '2024001',
-      tanggal: '2024-07-16',
-      kegiatan: 'Membuat landing page untuk website company profile menggunakan React dan Tailwind CSS',
-      kendala: 'Kesulitan dengan design yang belum sempurna di berbagai ukuran layar',
-      status: 'Disetujui',
-      catatan: 'Perhatikan layout responsive-ness',
-    },
-    {
-      id: 5,
-      siswa: 'Dewi Lestari',
-      nis: '2024001',
-      tanggal: '2024-07-12',
-      kegiatan: 'Debugging dan testing aplikasi mobile untuk menemukan semua bug sebelum rilis akhir nrojectapa push',
-      kendala: 'Menemukan beberapa bug pada fitur notification push',
-      status: 'Disetujui',
-      catatan: 'Kalau bagus, dokumentasikan langkah bugfixing',
-    },
-  ]);
+  const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
+  const [jurnalList, setJurnalList] = useState<LogbookWithSiswa[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
+  const [filterStatus, setFilterStatus] = useState('all');
   const [entriesPerPage, setEntriesPerPage] = useState('10');
+  
   const [showDetailDialog, setShowDetailDialog] = useState(false);
   const [showApprovalDialog, setShowApprovalDialog] = useState(false);
-  const [selectedJurnal, setSelectedJurnal] = useState<Jurnal | null>(null);
+  const [selectedJurnal, setSelectedJurnal] = useState<LogbookWithSiswa | null>(null);
   const [approvalAction, setApprovalAction] = useState<'approve' | 'reject'>('approve');
   const [catatan, setCatatan] = useState('');
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
+  const currentGuruEmail = "suryanto.guru@sekolah.id"; // Email guru yang login
+
+  // Fetch logbook data
+  const fetchLogbooks = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      // 1. Ambil data guru
+      const { data: guru, error: guruError } = await supabase
+        .from('guru')
+        .select('id')
+        .eq('email', currentGuruEmail)
+        .single();
+
+      if (guruError) throw guruError;
+      if (!guru) throw new Error('Data guru tidak ditemukan');
+
+      // 2. Ambil semua siswa yang dibimbing
+      const { data: siswaList, error: siswaError } = await supabase
+        .from('siswa')
+        .select('id')
+        .eq('guru_id', (guru as any).id);
+
+      if (siswaError) throw siswaError;
+
+      const siswaIds = (siswaList as any)?.map((s: any) => s.id) || [];
+
+      if (siswaIds.length === 0) {
+        setJurnalList([]);
+        setLoading(false);
+        return;
+      }
+
+      // 3. Ambil semua magang dari siswa yang dibimbing
+      const { data: magangList, error: magangError } = await supabase
+        .from('magang')
+        .select('id')
+        .in('siswa_id', siswaIds);
+
+      if (magangError) throw magangError;
+
+      const magangIds = (magangList as any)?.map((m: any) => m.id) || [];
+
+      if (magangIds.length === 0) {
+        setJurnalList([]);
+        setLoading(false);
+        return;
+      }
+
+      // 4. Ambil semua logbook dengan join siswa
+      const { data: logbooks, error: logbookError } = await supabase
+        .from('logbook')
+        .select(`
+          *,
+          magang:magang_id (
+            siswa:siswa_id (
+              nama,
+              nis
+            )
+          )
+        `)
+        .in('magang_id', magangIds)
+        .order('created_at', { ascending: false });
+
+      if (logbookError) throw logbookError;
+
+      // Transform data
+      const transformedData = (logbooks as any)?.map((log: any) => ({
+        ...log,
+        siswa: log.magang?.siswa || { nama: 'N/A', nis: 'N/A' }
+      })) || [];
+
+      setJurnalList(transformedData);
+
+    } catch (err: any) {
+      console.error('Error fetching logbooks:', err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchLogbooks();
+  }, [fetchLogbooks]);
+
   // Calculate stats
   const totalLogbook = jurnalList.length;
-  const belumDiverifikasi = jurnalList.filter(j => j.status === 'Belum Diverifikasi').length;
-  const disetujui = jurnalList.filter(j => j.status === 'Disetujui').length;
-  const ditolak = jurnalList.filter(j => j.status === 'Ditolak').length;
+  const belumDiverifikasi = jurnalList.filter(j => j.status_verifikasi === 'pending').length;
+  const disetujui = jurnalList.filter(j => j.status_verifikasi === 'disetujui').length;
+  const ditolak = jurnalList.filter(j => j.status_verifikasi === 'ditolak').length;
 
   const stats = [
     { title: 'Total Logbook', value: totalLogbook, subtitle: 'Laporan terdaftar', icon: FileText },
@@ -116,37 +158,58 @@ export default function ApprovalJurnalPage() {
   // Filter jurnal
   const filteredJurnal = jurnalList.filter((jurnal) => {
     const matchSearch = 
-      jurnal.siswa.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      jurnal.siswa.nama.toLowerCase().includes(searchTerm.toLowerCase()) ||
       jurnal.kegiatan.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      jurnal.kendala.toLowerCase().includes(searchTerm.toLowerCase());
+      jurnal.kendala?.toLowerCase().includes(searchTerm.toLowerCase());
 
-    const matchStatus = !filterStatus || jurnal.status === filterStatus;
+    const matchStatus = filterStatus === 'all' || jurnal.status_verifikasi === filterStatus;
 
     return matchSearch && matchStatus;
   });
 
-  const handleDetail = (jurnal: Jurnal) => {
+  const handleDetail = (jurnal: LogbookWithSiswa) => {
     setSelectedJurnal(jurnal);
     setShowDetailDialog(true);
   };
 
-  const handleApproval = (jurnal: Jurnal, action: 'approve' | 'reject') => {
+  const handleApproval = (jurnal: LogbookWithSiswa, action: 'approve' | 'reject') => {
     setSelectedJurnal(jurnal);
     setApprovalAction(action);
-    setCatatan(jurnal.catatan);
+    setCatatan(jurnal.catatan_guru || '');
     setShowApprovalDialog(true);
   };
 
-  const handleSubmitApproval = () => {
-    if (selectedJurnal) {
-      setJurnalList(jurnalList.map(j =>
-        j.id === selectedJurnal.id
-          ? { ...j, status: approvalAction === 'approve' ? 'Disetujui' : 'Ditolak', catatan }
-          : j
-      ));
+  const handleSubmitApproval = async () => {
+    if (!selectedJurnal) return;
+
+    try {
+      setActionLoading(true);
+
+      const updateData: any = {
+        status_verifikasi: approvalAction === 'approve' ? 'disetujui' : 'ditolak',
+        catatan_guru: catatan || null,
+        updated_at: new Date().toISOString()
+      };
+
+      const { error: updateError } = await supabase
+        .from('logbook')
+        .update(updateData as never)
+        .eq('id', selectedJurnal.id);
+
+      if (updateError) throw updateError;
+
+      // Refresh data
+      await fetchLogbooks();
+
       setShowApprovalDialog(false);
       setCatatan('');
       setSelectedJurnal(null);
+
+    } catch (err: any) {
+      console.error('Error updating logbook:', err);
+      alert('Gagal memperbarui status: ' + err.message);
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -166,14 +229,27 @@ export default function ApprovalJurnalPage() {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'Disetujui':
+      case 'disetujui':
         return 'bg-green-100 text-green-700';
-      case 'Ditolak':
+      case 'ditolak':
         return 'bg-red-100 text-red-700';
-      case 'Belum Diverifikasi':
+      case 'pending':
         return 'bg-yellow-100 text-yellow-700';
       default:
         return 'bg-gray-100 text-gray-700';
+    }
+  };
+
+  const getStatusLabel = (status: string) => {
+    switch (status) {
+      case 'disetujui':
+        return 'Disetujui';
+      case 'ditolak':
+        return 'Ditolak';
+      case 'pending':
+        return 'Belum Diverifikasi';
+      default:
+        return status;
     }
   };
 
@@ -181,6 +257,26 @@ export default function ApprovalJurnalPage() {
     const date = new Date(dateStr);
     return date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
   };
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-4">
+        <Loader2 className="animate-spin text-purple-600 h-10 w-10" />
+        <p className="text-gray-500 animate-pulse">Memuat data jurnal...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <Alert className="bg-red-50 border-red-200">
+        <AlertCircle className="h-4 w-4 text-red-600" />
+        <AlertDescription className="text-red-800">
+          Gagal memuat data: {error}
+        </AlertDescription>
+      </Alert>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -225,10 +321,17 @@ export default function ApprovalJurnalPage() {
               className="flex-1"
             />
 
-            <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-gray-500" />
-              <span className="text-sm text-gray-600">Tampilkan Filter</span>
-            </div>
+            <Select value={filterStatus} onValueChange={setFilterStatus}>
+              <SelectTrigger className="w-48">
+                <SelectValue placeholder="Semua Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Semua Status</SelectItem>
+                <SelectItem value="pending">Belum Diverifikasi</SelectItem>
+                <SelectItem value="disetujui">Disetujui</SelectItem>
+                <SelectItem value="ditolak">Ditolak</SelectItem>
+              </SelectContent>
+            </Select>
 
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-600">Tampilkan:</span>
@@ -267,75 +370,83 @@ export default function ApprovalJurnalPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {filteredJurnal.map((jurnal) => (
-                  <tr key={jurnal.id} className="hover:bg-purple-50 transition-colors">
-                    <td className="px-4 py-4">
-                      <Checkbox
-                        checked={selectedIds.includes(jurnal.id)}
-                        onCheckedChange={() => handleCheckboxChange(jurnal.id)}
-                      />
-                    </td>
-                    <td className="px-4 py-4">
-                      <div>
-                        <p className="font-medium text-gray-800 mb-1">{jurnal.siswa}</p>
-                        <p className="text-xs text-gray-500">NIS: {jurnal.nis}</p>
-                        <p className="text-xs text-gray-500 mt-1">{formatDate(jurnal.tanggal)}</p>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="space-y-2">
-                        <div>
-                          <p className="text-xs font-semibold text-gray-700">Kegiatan:</p>
-                          <p className="text-sm text-gray-600 line-clamp-2">{jurnal.kegiatan}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs font-semibold text-gray-700">Kendala:</p>
-                          <p className="text-sm text-gray-600 line-clamp-2">{jurnal.kendala}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <Badge className={`${getStatusColor(jurnal.status)} border-0 whitespace-nowrap`}>
-                        {jurnal.status}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-4">
-                      <p className="text-sm text-gray-600">
-                        {jurnal.catatan || 'Belum ada catatan'}
-                      </p>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-2">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handleDetail(jurnal)}
-                          className="hover:bg-purple-50"
-                        >
-                          <Eye className="w-4 h-4 text-gray-600" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handleApproval(jurnal, 'approve')}
-                          className="hover:bg-green-50"
-                          disabled={jurnal.status === 'Disetujui'}
-                        >
-                          <Check className="w-4 h-4 text-green-600" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handleApproval(jurnal, 'reject')}
-                          className="hover:bg-red-50"
-                          disabled={jurnal.status === 'Ditolak'}
-                        >
-                          <X className="w-4 h-4 text-red-600" />
-                        </Button>
-                      </div>
+                {filteredJurnal.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
+                      Tidak ada jurnal yang ditemukan
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredJurnal.slice(0, parseInt(entriesPerPage)).map((jurnal) => (
+                    <tr key={jurnal.id} className="hover:bg-purple-50 transition-colors">
+                      <td className="px-4 py-4">
+                        <Checkbox
+                          checked={selectedIds.includes(jurnal.id)}
+                          onCheckedChange={() => handleCheckboxChange(jurnal.id)}
+                        />
+                      </td>
+                      <td className="px-4 py-4">
+                        <div>
+                          <p className="font-medium text-gray-800 mb-1">{jurnal.siswa.nama}</p>
+                          <p className="text-xs text-gray-500">NIS: {jurnal.siswa.nis}</p>
+                          <p className="text-xs text-gray-500 mt-1">{formatDate(jurnal.tanggal)}</p>
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="space-y-2 max-w-md">
+                          <div>
+                            <p className="text-xs font-semibold text-gray-700">Kegiatan:</p>
+                            <p className="text-sm text-gray-600 line-clamp-2">{jurnal.kegiatan}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs font-semibold text-gray-700">Kendala:</p>
+                            <p className="text-sm text-gray-600 line-clamp-2">{jurnal.kendala || '-'}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <Badge className={`${getStatusColor(jurnal.status_verifikasi)} border-0 whitespace-nowrap`}>
+                          {getStatusLabel(jurnal.status_verifikasi)}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-4">
+                        <p className="text-sm text-gray-600 max-w-xs line-clamp-2">
+                          {jurnal.catatan_guru || 'Belum ada catatan'}
+                        </p>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => handleDetail(jurnal)}
+                            className="hover:bg-purple-50"
+                          >
+                            <Eye className="w-4 h-4 text-gray-600" />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => handleApproval(jurnal, 'approve')}
+                            className="hover:bg-green-50"
+                            disabled={jurnal.status_verifikasi === 'disetujui'}
+                          >
+                            <Check className="w-4 h-4 text-green-600" />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => handleApproval(jurnal, 'reject')}
+                            className="hover:bg-red-50"
+                            disabled={jurnal.status_verifikasi === 'ditolak'}
+                          >
+                            <X className="w-4 h-4 text-red-600" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -343,7 +454,7 @@ export default function ApprovalJurnalPage() {
           {/* Pagination */}
           <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
             <p className="text-sm text-gray-600">
-              Menampilkan 1 sampai 5 dari 5 entri
+              Menampilkan {Math.min(filteredJurnal.length, parseInt(entriesPerPage))} dari {filteredJurnal.length} entri
             </p>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="outline" disabled>
@@ -379,11 +490,11 @@ export default function ApprovalJurnalPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label className="text-gray-600">Nama Siswa</Label>
-                  <p className="font-medium text-gray-800">{selectedJurnal.siswa}</p>
+                  <p className="font-medium text-gray-800">{selectedJurnal.siswa.nama}</p>
                 </div>
                 <div>
                   <Label className="text-gray-600">NIS</Label>
-                  <p className="font-medium text-gray-800">{selectedJurnal.nis}</p>
+                  <p className="font-medium text-gray-800">{selectedJurnal.siswa.nis}</p>
                 </div>
               </div>
 
@@ -399,22 +510,22 @@ export default function ApprovalJurnalPage() {
 
               <div>
                 <Label className="text-gray-600">Kendala</Label>
-                <p className="text-sm text-gray-800 mt-1">{selectedJurnal.kendala}</p>
+                <p className="text-sm text-gray-800 mt-1">{selectedJurnal.kendala || '-'}</p>
               </div>
 
               <div>
                 <Label className="text-gray-600">Status</Label>
                 <div className="mt-1">
-                  <Badge className={`${getStatusColor(selectedJurnal.status)} border-0`}>
-                    {selectedJurnal.status}
+                  <Badge className={`${getStatusColor(selectedJurnal.status_verifikasi)} border-0`}>
+                    {getStatusLabel(selectedJurnal.status_verifikasi)}
                   </Badge>
                 </div>
               </div>
 
-              {selectedJurnal.catatan && (
+              {selectedJurnal.catatan_guru && (
                 <div>
                   <Label className="text-gray-600">Catatan Guru</Label>
-                  <p className="text-sm text-gray-800 mt-1">{selectedJurnal.catatan}</p>
+                  <p className="text-sm text-gray-800 mt-1">{selectedJurnal.catatan_guru}</p>
                 </div>
               )}
             </div>
@@ -446,7 +557,7 @@ export default function ApprovalJurnalPage() {
             {selectedJurnal && (
               <div className="bg-purple-50 p-4 rounded-lg">
                 <p className="text-sm text-gray-600 mb-1">Siswa:</p>
-                <p className="font-semibold text-gray-800">{selectedJurnal.siswa}</p>
+                <p className="font-semibold text-gray-800">{selectedJurnal.siswa.nama}</p>
                 <p className="text-xs text-gray-500 mt-2">
                   {formatDate(selectedJurnal.tanggal)}
                 </p>
@@ -479,6 +590,7 @@ export default function ApprovalJurnalPage() {
                 setShowApprovalDialog(false);
                 setCatatan('');
               }}
+              disabled={actionLoading}
             >
               Batal
             </Button>
@@ -489,8 +601,9 @@ export default function ApprovalJurnalPage() {
                   : 'bg-red-600 hover:bg-red-700'
               }
               onClick={handleSubmitApproval}
-              disabled={approvalAction === 'reject' && !catatan}
+              disabled={actionLoading || (approvalAction === 'reject' && !catatan)}
             >
+              {actionLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {approvalAction === 'approve' ? 'Setujui' : 'Tolak'}
             </Button>
           </DialogFooter>

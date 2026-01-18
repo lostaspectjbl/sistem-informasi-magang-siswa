@@ -1,27 +1,215 @@
-// File: src/app/guru/dashboard/page.tsx
 'use client';
 
-import React from 'react';
-import { Users, Building2, BookOpen, MapPin, Phone } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Users, BookOpen, Loader2, AlertCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { supabase } from '@/lib/supabase';
+import { Database } from '@/types';
+
+type GuruRow = Database['public']['Tables']['guru']['Row'];
+type SiswaRow = Database['public']['Tables']['siswa']['Row'];
+type MagangRow = Database['public']['Tables']['magang']['Row'];
+type LogbookRow = Database['public']['Tables']['logbook']['Row'];
+type DudiRow = Database['public']['Tables']['dudi']['Row'];
+
+interface MagangWithDetails extends MagangRow {
+  siswa: SiswaRow;
+  dudi: DudiRow;
+}
+
+interface LogbookWithDetails extends LogbookRow {
+  magang: {
+    siswa: SiswaRow;
+  };
+}
+
+interface DashboardStats {
+  totalSiswa: number;
+  siswaMagang: number;
+  logbookHariIni: number;
+}
 
 export default function DashboardPage() {
-  const stats = [
-    { title: "Total Siswa", value: "150", subtitle: "Seluruh siswa terdaftar", icon: Users },
-    { title: "Siswa Magang", value: "120", subtitle: "Sedang aktif magang", icon: Users },
-    { title: "Logbook Hari Ini", value: "85", subtitle: "Laporan masuk hari ini", icon: BookOpen },
-  ];
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  
+  const [guruData, setGuruData] = useState<GuruRow | null>(null);
+  const [stats, setStats] = useState<DashboardStats>({
+    totalSiswa: 0,
+    siswaMagang: 0,
+    logbookHariIni: 0
+  });
+  const [internships, setInternships] = useState<MagangWithDetails[]>([]);
+  const [logbooks, setLogbooks] = useState<LogbookWithDetails[]>([]);
 
-  const internships = [
-    { student: 'Ahmad Rizki', company: 'PT. Teknologi Nusantara', date: '15/1/2024 - 15/4/2024', status: 'Aktif' },
-    { student: 'Siti Nurhaliza', company: 'CV. Digital Kreatifa', date: '20/1/2024 - 20/4/2024', status: 'Aktif' }
-  ];
-  const logbooks = [
-    { title: 'Mempelajari sistem database dan melakukan backup data harian', date: '11/7/2024', status: 'Disetujui', detail: 'Kendala: tidak ada kendala berarti' },
-    { title: 'Membuat design mockup untuk website perusahaan', date: '21/7/2024', status: 'Pending', detail: 'Kendala: Software design masih belum familiar' },
-    { title: 'Mengikuti training keamanan sistem informasi', date: '30/7/2024', status: 'Ditolak', detail: 'Kendala: Materi cukup kompleks untuk dipahami' }
+  const currentGuruEmail = "suryanto.guru@sekolah.id"; // Email guru yang login
+
+  // Fetch semua data dashboard
+  const fetchDashboardData = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      // 1. Ambil data guru
+      const { data: guru, error: guruError } = await supabase
+        .from('guru')
+        .select('*')
+        .eq('email', currentGuruEmail)
+        .single();
+
+      if (guruError) throw guruError;
+      if (!guru) throw new Error('Data guru tidak ditemukan');
+
+      setGuruData(guru as any);
+
+      // 2. Ambil semua siswa yang dibimbing guru ini
+      const { data: siswaList, error: siswaError } = await supabase
+        .from('siswa')
+        .select('*')
+        .eq('guru_id', (guru as any).id);
+
+      if (siswaError) throw siswaError;
+
+      const totalSiswa = (siswaList as any)?.length || 0;
+      const siswaIds = (siswaList as any)?.map((s: any) => s.id) || [];
+
+      // 3. Ambil magang aktif dari siswa yang dibimbing
+      let magangList: any[] = [];
+      if (siswaIds.length > 0) {
+        const { data: magang, error: magangError } = await supabase
+          .from('magang')
+          .select(`
+            *,
+            siswa:siswa_id (*),
+            dudi:dudi_id (*)
+          `)
+          .in('siswa_id', siswaIds)
+          .eq('status', 'aktif')
+          .order('created_at', { ascending: false })
+          .limit(5);
+
+        if (!magangError && magang) {
+          magangList = magang.map((m: any) => ({
+            ...m,
+            siswa: m.siswa,
+            dudi: m.dudi
+          }));
+        }
+      }
+
+      const siswaMagang = magangList.length;
+
+      // 4. Ambil logbook hari ini
+      const today = new Date().toISOString().split('T')[0];
+      let logbookHariIni = 0;
+      let logbookList: any[] = [];
+
+      if (siswaIds.length > 0) {
+        // Ambil semua magang_id dari siswa yang dibimbing
+        const { data: allMagang, error: allMagangError } = await supabase
+          .from('magang')
+          .select('id')
+          .in('siswa_id', siswaIds);
+
+        const magangIds = (allMagang as any)?.map((m: any) => m.id) || [];
+
+        if (magangIds.length > 0) {
+          // Ambil logbook hari ini
+          const { data: logbookToday, error: logbookTodayError } = await supabase
+            .from('logbook')
+            .select('id')
+            .in('magang_id', magangIds)
+            .eq('tanggal', today);
+
+          logbookHariIni = (logbookToday as any)?.length || 0;
+
+          // Ambil logbook terbaru (5 terakhir)
+          const { data: recentLogbooks, error: logbookError } = await supabase
+            .from('logbook')
+            .select(`
+              *,
+              magang:magang_id (
+                siswa:siswa_id (*)
+              )
+            `)
+            .in('magang_id', magangIds)
+            .order('created_at', { ascending: false })
+            .limit(5);
+
+          if (!logbookError && recentLogbooks) {
+            logbookList = recentLogbooks.map((l: any) => ({
+              ...l,
+              magang: {
+                siswa: l.magang?.siswa
+              }
+            }));
+          }
+        }
+      }
+
+      // Update state
+      setStats({
+        totalSiswa,
+        siswaMagang,
+        logbookHariIni
+      });
+      setInternships(magangList);
+      setLogbooks(logbookList);
+
+    } catch (err: any) {
+      console.error('Error fetching dashboard data:', err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, [fetchDashboardData]);
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-4">
+        <Loader2 className="animate-spin text-purple-600 h-10 w-10" />
+        <p className="text-gray-500 animate-pulse">Memuat dashboard...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <Alert className="bg-red-50 border-red-200">
+        <AlertCircle className="h-4 w-4 text-red-600" />
+        <AlertDescription className="text-red-800">
+          Gagal memuat data: {error}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  const statsData = [
+    { 
+      title: "Total Siswa", 
+      value: stats.totalSiswa.toString(), 
+      subtitle: "Seluruh siswa bimbingan", 
+      icon: Users 
+    },
+    { 
+      title: "Siswa Magang", 
+      value: stats.siswaMagang.toString(), 
+      subtitle: "Sedang aktif magang", 
+      icon: Users 
+    },
+    { 
+      title: "Logbook Hari Ini", 
+      value: stats.logbookHariIni.toString(), 
+      subtitle: "Laporan masuk hari ini", 
+      icon: BookOpen 
+    },
   ];
 
   return (
@@ -29,13 +217,14 @@ export default function DashboardPage() {
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-800 mb-2">Dashboard Guru</h1>
         <p className="text-gray-600">
-          Pantau dan kelola siswa bimbingan anda
+          Pantau dan kelola siswa bimbingan Anda
+          {guruData && <span className="font-semibold"> - {guruData.nama}</span>}
         </p>
       </div>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-        {stats.map((stat, index) => {
+        {statsData.map((stat, index) => {
           const Icon = stat.icon;
           return (
             <Card key={index}>
@@ -52,39 +241,46 @@ export default function DashboardPage() {
         })}
       </div>
 
-      {/* Main Content Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        {/* Magang Terbaru */}
-        <Card className="lg:col-span-4">
-          <CardHeader>
-            <CardTitle className="flex items-center">
-              <Users className="w-5 h-5 mr-2 text-[#ad46ff]" />
-              Magang Terbaru
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {internships.map((internship, index) => (
-              <div key={index} className="flex items-center justify-between p-4 bg-white rounded-lg shadow-sm">
+      {/* Magang Terbaru */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center">
+            <Users className="w-5 h-5 mr-2 text-[#ad46ff]" />
+            Magang Terbaru
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {internships.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              Belum ada siswa yang magang
+            </div>
+          ) : (
+            internships.map((internship, index) => (
+              <div key={index} className="flex items-center justify-between p-4 bg-white rounded-lg shadow-sm border">
                 <div className="flex items-center space-x-3">
                   <Avatar>
                     <AvatarFallback className="bg-[#ad46ff] text-white">
-                      {internship.student[0]}
+                      {internship.siswa?.nama?.[0] || 'S'}
                     </AvatarFallback>
                   </Avatar>
                   <div>
-                    <p className="font-medium text-gray-800">{internship.student}</p>
-                    <p className="text-sm text-gray-600">{internship.company}</p>
-                    <p className="text-xs text-gray-500">{internship.date}</p>
+                    <p className="font-medium text-gray-800">{internship.siswa?.nama || 'N/A'}</p>
+                    <p className="text-sm text-gray-600">{internship.dudi?.nama_perusahaan || 'N/A'}</p>
+                    <p className="text-xs text-gray-500">
+                      {internship.tanggal_mulai && internship.tanggal_selesai ? (
+                        `${new Date(internship.tanggal_mulai).toLocaleDateString('id-ID')} - ${new Date(internship.tanggal_selesai).toLocaleDateString('id-ID')}`
+                      ) : 'Tanggal belum ditentukan'}
+                    </p>
                   </div>
                 </div>
                 <Badge className="bg-green-100 text-green-700 hover:bg-green-100">
-                  {internship.status}
+                  Aktif
                 </Badge>
               </div>
-            ))}
-          </CardContent>
-        </Card>
-      </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
 
       {/* Logbook Terbaru */}
       <Card>
@@ -95,41 +291,66 @@ export default function DashboardPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {logbooks.map((logbook, index) => {
-            const statusVariant =
-              logbook.status === 'Disetujui' ? 'default' :
-              logbook.status === 'Pending' ? 'secondary' :
-              'destructive';
+          {logbooks.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              Belum ada logbook yang masuk
+            </div>
+          ) : (
+            logbooks.map((logbook, index) => {
+              const statusColors = {
+                disetujui: 'bg-green-100 text-green-700 hover:bg-green-100',
+                pending: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-100',
+                ditolak: 'bg-red-100 text-red-700 hover:bg-red-100'
+              };
 
-            return (
-              <div key={index} className="p-4 bg-white rounded-lg shadow-sm">
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex items-center space-x-3 flex-1">
-                    <Avatar className="bg-[#ad46ff]">
-                      <AvatarFallback className="bg-[#ad46ff] text-white">
-                        <BookOpen className="w-5 h-5" />
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-800">{logbook.title}</p>
-                      <p className="text-xs text-gray-500">{logbook.date}</p>
+              const statusLabel = {
+                disetujui: 'Disetujui',
+                pending: 'Pending',
+                ditolak: 'Ditolak'
+              };
+
+              const statusColor = statusColors[logbook.status_verifikasi as keyof typeof statusColors] || statusColors.pending;
+              const label = statusLabel[logbook.status_verifikasi as keyof typeof statusLabel] || 'Pending';
+
+              return (
+                <div key={index} className="p-4 bg-white rounded-lg shadow-sm border">
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex items-center space-x-3 flex-1">
+                      <Avatar>
+                        <AvatarFallback className="bg-[#ad46ff] text-white">
+                          <BookOpen className="w-5 h-5" />
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1">
+                        <p className="font-medium text-gray-800 line-clamp-2">{logbook.kegiatan}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <p className="text-xs text-gray-500">
+                            {new Date(logbook.tanggal).toLocaleDateString('id-ID')}
+                          </p>
+                          {logbook.magang?.siswa && (
+                            <>
+                              <span className="text-xs text-gray-400">•</span>
+                              <p className="text-xs text-gray-500">
+                                {logbook.magang.siswa.nama}
+                              </p>
+                            </>
+                          )}
+                        </div>
+                      </div>
                     </div>
+                    <Badge className={statusColor}>
+                      {label}
+                    </Badge>
                   </div>
-                  <Badge
-                    variant={statusVariant}
-                    className={
-                      logbook.status === 'Disetujui' ? 'bg-green-100 text-green-700 hover:bg-green-100' :
-                      logbook.status === 'Pending' ? 'bg-yellow-100 text-yellow-700 hover:bg-yellow-100' :
-                      'bg-red-100 text-red-700 hover:bg-red-100'
-                    }
-                  >
-                    {logbook.status}
-                  </Badge>
+                  {logbook.kendala && (
+                    <p className="text-sm text-purple-600 ml-12 line-clamp-1">
+                      Kendala: {logbook.kendala}
+                    </p>
+                  )}
                 </div>
-                <p className="text-sm text-purple-600 ml-13">{logbook.detail}</p>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </CardContent>
       </Card>
     </div>
